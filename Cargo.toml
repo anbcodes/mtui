@@ -11,6 +11,7 @@ libc = "0.2"
 mtui = { path = "crates/mtui" }
 mhttp = { path = "crates/mhttp" }
 mimg = { path = "crates/mimg" }
+mvi = { path = "crates/mvi" }
 
 [profile.release]
 opt-level = 3

@@ -78,6 +78,8 @@ impl App {
         }
         let y_status = h - 1;
         let mut cursor = None;
+        let editing = matches!(self.mode, Mode::Edit(..));
+        let body_bottom = if editing { y_status - pane_h(h) } else { y_status };
 
         if let Mode::Image(key) = &self.mode {
             self.screen.set_images(self.gallery.place_full(key, 1, (w, h - 1)).into_iter().collect());
@@ -96,7 +98,7 @@ impl App {
         }
         let x0 = if side_w > 0 { side_w + 1 } else { 0 };
         if side_w > 0 {
-            self.render_side(side_w, y_status);
+            self.render_side(side_w, body_bottom);
         } else {
             self.geo.side = Default::default();
             self.geo.side_map.clear();
@@ -105,9 +107,9 @@ impl App {
             }
         }
         if thread {
-            self.render_thread(x0, y_status);
+            self.render_thread(x0, body_bottom);
         } else {
-            self.render_list(x0, y_status);
+            self.render_list(x0, body_bottom);
         }
 
         // status line
@@ -115,6 +117,7 @@ impl App {
             Mode::Search(_) => (" SEARCH ", 108),
             Mode::Confirm(_) => (" CONFIRM ", 203),
             Mode::Pick(..) | Mode::Links(_) | Mode::Atts(_) => (" PICK ", 180),
+            Mode::Edit(..) => (" COMPOSE ", 108),
             Mode::Send => (" SEND? ", 203),
             _ if self.thread.is_some() => (" MAIL ", 110),
             _ if self.focus == Focus::Side && self.geo.side.w > 0 => (if self.thread.is_some() { " LIST " } else { " FOLDERS " }, 108),
@@ -181,6 +184,10 @@ impl App {
                 cursor = None;
             }
             _ => {}
+        }
+        if let Mode::Edit(pane, _) = &mut self.mode {
+            let ph = pane_h(h);
+            cursor = pane.draw(&mut self.screen, (0, y_status - ph), (w, ph));
         }
         self.screen.flush(cursor);
     }

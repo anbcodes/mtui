@@ -12,6 +12,10 @@ cargo build --release -p mvi
 ./target/release/mvi [+LINE] file...        # `mvi -` reads stdin
 ```
 
+## As a library
+
+`mvi` is also a crate: `mvi::Editor` is the editor, `mvi::run(&mut ed, &mut input)` is the event loop (the caller owns raw mode and the `mtui::term::Input`), `mvi::edit_file(&mut input, path, line)` runs a full-screen session on a file, and `mvi::Pane` embeds the editor in a rectangle of the host's `mtui::screen::Screen`: the host passes it keys (`pane.key`), draws it (`pane.draw(&mut screen, (x, y), (w, h))`, which returns the cursor) and checks `pane.finished()`. mmail uses a pane to write messages.
+
 ## Features
 
 | | |

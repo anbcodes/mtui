@@ -1,17 +1,7 @@
-mod buffer;
-mod complete;
-mod diag;
-mod editor;
-mod ex;
-mod picker;
-mod preview;
-mod render;
-use mtui::syntax;
-
+use mvi::{editor, ex};
 use mtui::term;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 
 fn usage() -> ! {
     println!("usage: mvi [+LINE] [FILE...]   (use - to read stdin)\n       mvi --help-keys");
@@ -58,18 +48,7 @@ fn main() {
 
     let (w, h) = term::size();
     let mut ed = editor::Editor::new(w, h);
-    if let Some(home) = std::env::var_os("HOME") {
-        let cfg = PathBuf::from(home).join(".config/mvi/config");
-        if let Ok(s) = std::fs::read_to_string(cfg) {
-            for l in s.lines() {
-                let l = l.trim();
-                if !l.is_empty() && !l.starts_with('"') && !l.starts_with('#') {
-                    ed.ex(l);
-                }
-            }
-            ed.msg.clear();
-        }
-    }
+    mvi::load_config(&mut ed);
     if let Some(t) = stdin_text {
         let b = ed.b();
         b.lines = t.lines().map(|s| s.to_string()).collect();
@@ -92,41 +71,11 @@ fn main() {
         ed.set_cursor((y, 0));
     }
 
-    term::set_mouse(ed.opts.mouse);
     if let Err(e) = term::enable_raw() {
         eprintln!("mvi: cannot enter raw mode: {}", e);
         std::process::exit(1);
     }
     let mut input = term::Input::new();
-    loop {
-        ed.render();
-        let timeout = if ed.check_running { 100 } else { -1 };
-        if let Some(k) = input.next_key(timeout) {
-            ed.handle_key(k);
-            // drain whatever is already buffered before redrawing (paste, fast typing, ssh bursts)
-            let mut n = 0;
-            while !ed.quit && n < 4096 && input.ready() {
-                match input.next_key(0) {
-                    Some(k) => ed.handle_key(k),
-                    None => break,
-                }
-                n += 1;
-            }
-        }
-        if term::RESIZED.swap(false, Ordering::Relaxed) {
-            let (w, h) = term::size();
-            ed.screen.resize(w, h);
-        }
-        ed.poll_check();
-        if ed.suspend {
-            ed.suspend = false;
-            term::suspend();
-            let (w, h) = term::size();
-            ed.screen.resize(w, h);
-        }
-        if ed.quit {
-            break;
-        }
-    }
+    mvi::run(&mut ed, &mut input);
     term::disable_raw();
 }

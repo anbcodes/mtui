@@ -18,6 +18,9 @@ impl App {
             self.screen.invalidate();
             return;
         }
+        if matches!(self.mode, Mode::Edit(..)) {
+            return self.edit_key(k);
+        }
         if let Key::Mouse(m) = k {
             match &self.mode {
                 Mode::Normal => return self.mouse(m),
@@ -88,7 +91,7 @@ impl App {
                 }
                 _ => self.mode = Mode::Send,
             },
-            Mode::Help | Mode::Image(_) => {}
+            Mode::Help | Mode::Image(_) | Mode::Edit(..) => {}
         }
     }
 

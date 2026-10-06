@@ -80,7 +80,7 @@ impl Editor {
         }
     }
 
-    pub fn render_preview(&mut self) {
+    pub fn draw_preview(&mut self) -> Option<(usize, usize, bool)> {
         let (w, h) = (self.screen.w, self.screen.h);
         if self.preview.as_ref().is_some_and(|p| p.width != w) {
             let lines = self.render_md(w);
@@ -107,6 +107,6 @@ impl Editor {
         self.screen.puts(x + 1, y, &format!("{}   q close · Enter go to source · j k C-d C-u g G", name), bar, w);
         let s = format!("{}% ", pct);
         self.screen.puts(w.saturating_sub(s.len()), y, &s, Style::new(242, 236, 0), w);
-        self.screen.flush(None);
+        None
     }
 }

@@ -271,15 +271,20 @@ pub fn expand_home(p: &str) -> String {
     }
 }
 
-/// Write `text` to a private temp file, run the user's editor on it, and
-/// return the edited text. The caller has already left raw mode.
-pub fn edit(text: &str, body_line: usize) -> Result<String, String> {
+/// Write `text` to a new private temp file for the editor.
+pub fn write_temp(text: &str) -> Result<std::path::PathBuf, String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let path = std::env::temp_dir().join(format!("mmail-{}-{}.eml", std::process::id(), timefmt::now()));
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
     f.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
-    drop(f);
+    Ok(path)
+}
+
+/// Run the user's `$VISUAL` / `$EDITOR` on `text` and return the edited text.
+/// The caller has already left raw mode.
+pub fn edit(text: &str, body_line: usize) -> Result<String, String> {
+    let path = write_temp(text)?;
     let spec = ["VISUAL", "EDITOR"].iter().find_map(|k| std::env::var(k).ok().filter(|s| !s.trim().is_empty())).unwrap_or_else(|| "vi".into());
     let mut words = spec.split_whitespace();
     let prog = words.next().unwrap_or("vi");

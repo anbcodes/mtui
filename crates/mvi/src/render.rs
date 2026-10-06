@@ -62,15 +62,22 @@ impl Editor {
         }
     }
 
+    /// Draw a frame to the terminal.
     pub fn render(&mut self) {
+        let cursor = self.draw();
+        self.screen.flush(cursor);
+    }
+
+    /// Draw a frame into `self.screen` without sending it; returns where the
+    /// cursor goes (x, y, bar shape).
+    pub fn draw(&mut self) -> Option<(usize, usize, bool)> {
         if self.preview.is_some() {
-            return self.render_preview();
+            return self.draw_preview();
         }
         self.scroll();
         let (w, h) = (self.screen.w, self.screen.h);
         if w < 10 || h < 3 {
-            self.screen.flush(None);
-            return;
+            return None;
         }
         self.screen.clear();
         let th = self.text_h();
@@ -368,6 +375,6 @@ impl Editor {
             cursor = Some((x, y, true));
         }
 
-        self.screen.flush(cursor);
+        cursor
     }
 }

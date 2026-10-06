@@ -106,6 +106,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mjira"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mhttp",
+ "mimg",
+ "mtui",
+]
+
+[[package]]
 name = "mmail"
 version = "0.1.0"
 dependencies = [
@@ -113,6 +123,7 @@ dependencies = [
  "mhttp",
  "mimg",
  "mtui",
+ "mvi",
 ]
 
 [[package]]

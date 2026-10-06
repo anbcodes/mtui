@@ -45,7 +45,8 @@ The mouse works everywhere: click a folder or a row (double-click opens), click 
 
 ## Writing
 
-mmail opens your `$VISUAL` / `$EDITOR` (or `vi`) on the message as text:
+mmail writes in [mvi](../mvi), embedded: the editor takes the bottom half of the screen as a pane, so the list or conversation you're answering stays visible above it (your `~/.config/mvi/config` applies; `:wq` finishes, and the mouse works inside the pane). To use `$VISUAL` / `$EDITOR` instead, put `editor external` in `~/.config/mmail/config` or set `MMAIL_EDITOR=external`.
+
 
 ```
 From: Me <me@example.com>

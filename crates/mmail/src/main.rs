@@ -22,6 +22,8 @@ anywhere show up here within a moment (and the other way round).
 Token: a Fastmail API token with Email and Email submission access
 (Settings > Privacy & Security > Integrations > New API token), as
 $FASTMAIL_TOKEN or a line `token fmu1-…` in ~/.config/mmail/config.
+Messages are written in the built-in mvi (your ~/.config/mvi/config applies);
+`editor external` in the config, or MMAIL_EDITOR=external, uses $VISUAL / $EDITOR.
 Other JMAP servers: `session https://host/.well-known/jmap` in the config, or
 $MMAIL_SESSION_URL. Attachments are saved to $MMAIL_DOWNLOADS (~/Downloads).
 
@@ -40,17 +42,19 @@ struct Config {
     session: String,
     mouse: bool,
     images: bool,
+    external_editor: bool,
 }
 
 fn config() -> Config {
     let env = |k: &str| std::env::var(k).ok().filter(|s| !s.is_empty());
-    let mut c = Config { token: env("FASTMAIL_TOKEN").or_else(|| env("JMAP_TOKEN")), session: env("MMAIL_SESSION_URL").unwrap_or_default(), mouse: true, images: true };
+    let mut c = Config { token: env("FASTMAIL_TOKEN").or_else(|| env("JMAP_TOKEN")), session: env("MMAIL_SESSION_URL").unwrap_or_default(), mouse: true, images: true, external_editor: env("MMAIL_EDITOR").is_some_and(|v| v == "external") };
     if let Some(s) = config_dir("mmail/config").and_then(|p| std::fs::read_to_string(p).ok()) {
         for l in s.lines() {
             match l.trim().split_once(char::is_whitespace) {
                 Some(("token", v)) if c.token.is_none() => c.token = Some(v.trim().to_string()),
                 Some(("session", v)) if c.session.is_empty() => c.session = v.trim().to_string(),
                 Some(("mouse", v)) => c.mouse = !matches!(v.trim(), "off" | "no" | "false" | "0"),
+                Some(("editor", v)) => c.external_editor = v.trim() == "external",
                 Some(("images", v)) => c.images = !matches!(v.trim(), "off" | "no" | "false" | "0"),
                 _ => {}
             }
@@ -76,7 +80,7 @@ fn main() {
             }
         }
     }
-    let Config { token: Some(token), session, mouse, images } = config() else {
+    let Config { token: Some(token), session, mouse, images, external_editor } = config() else {
         eprintln!("mmail: no token; set FASTMAIL_TOKEN or add `token …` to ~/.config/mmail/config (mmail --help)");
         std::process::exit(1);
     };
@@ -99,6 +103,7 @@ fn main() {
     let net = jmap::Net::new(token, sess, tx, waker);
     let (w, h) = term::size();
     let mut app = app::App::new(w, h, net, me, images);
+    app.external_editor = external_editor;
 
     term::set_mouse(mouse);
     if let Err(e) = term::enable_raw() {

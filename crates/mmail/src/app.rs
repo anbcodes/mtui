@@ -25,6 +25,11 @@ const SYNC_GAP: Duration = Duration::from_millis(400);
 /// Resync this often when push isn't connected.
 const POLL: Duration = Duration::from_secs(45);
 
+/// Rows the editing pane takes at the bottom of a `h`-row screen.
+pub fn pane_h(h: usize) -> usize {
+    (h / 2).max(10).min(h.saturating_sub(8))
+}
+
 pub const HELP: &str = "\
 mailbox list:
   j k ↑ ↓      select              gg G  first / last   C-d C-u  page
@@ -111,6 +116,8 @@ pub enum PickKind {
 
 pub enum Mode {
     Normal,
+    /// Writing a message in mvi, docked at the bottom.
+    Edit(Box<mvi::Pane>, std::path::PathBuf),
     Search(LineEdit),
     /// Delete these messages for good (y/n).
     Confirm(Vec<Row>),
@@ -223,6 +230,8 @@ pub struct App {
     pub(crate) compose: Option<Compose>,
     outbox: Option<Outbox>,
     want_editor: bool,
+    /// Write messages in `$VISUAL` / `$EDITOR` instead of the built-in mvi.
+    pub external_editor: bool,
     downloads: String,
 }
 
@@ -273,6 +282,7 @@ impl App {
             compose: None,
             outbox: None,
             want_editor: false,
+            external_editor: false,
             downloads: downloads_dir(),
         };
         let account = app.acct();
@@ -835,7 +845,49 @@ impl App {
         }
         let (text, line) = d.to_text();
         self.compose = Some(Compose { draft: d, text, line });
-        self.want_editor = true;
+        self.begin_edit();
+    }
+
+    /// Start writing: mvi in a pane at the bottom of the screen, or the
+    /// user's own editor taking over the terminal.
+    fn begin_edit(&mut self) {
+        let Some(c) = &self.compose else { return };
+        if self.external_editor {
+            self.want_editor = true;
+            return;
+        }
+        match compose::write_temp(&c.text) {
+            Ok(path) => {
+                let (w, h) = (self.screen.w, pane_h(self.screen.h));
+                self.mode = Mode::Edit(Box::new(mvi::Pane::open(w, h, &path, c.line)), path);
+                self.info(":wq to finish writing, :q! to leave it as it was");
+            }
+            Err(e) => {
+                self.compose = None;
+                self.error(e);
+            }
+        }
+    }
+
+    /// A key for the pane; when the editor quits, take its file.
+    pub(crate) fn edit_key(&mut self, k: term::Key) {
+        let h = self.screen.h;
+        let Mode::Edit(pane, _) = &mut self.mode else { return };
+        let mut k = k;
+        if let term::Key::Mouse(m) = &mut k {
+            let y0 = h - 1 - pane_h(h);
+            if m.y < y0 || m.y >= h - 1 {
+                return;
+            }
+            m.y -= y0;
+        }
+        pane.key(k);
+        if pane.finished() {
+            let Mode::Edit(_, path) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
+            let r = std::fs::read_to_string(&path).map_err(|e| e.to_string());
+            let _ = std::fs::remove_file(&path);
+            self.edited(r);
+        }
     }
 
     pub fn wants_editor(&self) -> bool {
@@ -851,6 +903,11 @@ impl App {
         let r = compose::edit(&text, line);
         let _ = term::enable_raw();
         self.screen.invalidate();
+        self.edited(r);
+    }
+
+    /// What the editor left: the message to confirm, or why there is none.
+    fn edited(&mut self, r: Result<String, String>) {
         let Some(c) = &mut self.compose else { return };
         match r {
             Ok(t) => {
@@ -875,7 +932,7 @@ impl App {
     pub(crate) fn edit_again(&mut self) {
         if self.compose.is_some() {
             self.mode = Mode::Normal;
-            self.want_editor = true;
+            self.begin_edit();
         }
     }
 

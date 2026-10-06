@@ -139,6 +139,16 @@ impl Screen {
         x
     }
 
+    /// Copy another screen's cells in with its top-left corner at (x0, y0),
+    /// clipped to this one (to embed a view that draws on a screen of its own).
+    pub fn blit(&mut self, src: &Screen, x0: usize, y0: usize) {
+        for y in 0..src.h.min(self.h.saturating_sub(y0)) {
+            for x in 0..src.w.min(self.w.saturating_sub(x0)) {
+                self.cells[(y0 + y) * self.w + x0 + x] = src.cells[y * src.w + x];
+            }
+        }
+    }
+
     pub fn fill(&mut self, x0: usize, x1: usize, y: usize, st: Style) {
         for x in x0..x1.min(self.w) {
             self.put(x, y, ' ', st);
