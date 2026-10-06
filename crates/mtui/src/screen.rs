@@ -1,6 +1,7 @@
 // Double-buffered cell grid. Only changed cells are sent to the terminal,
 // which keeps redraws cheap over slow links.
 
+use crate::kitty::{self, Placement};
 use std::io::Write;
 
 pub const BOLD: u8 = 1;
@@ -41,6 +42,8 @@ pub struct Screen {
     prev: Vec<Cell>,
     out: Vec<u8>,
     full: bool,
+    images: Vec<Placement>,
+    shown: Vec<Placement>,
 }
 
 pub fn char_width(c: char) -> usize {
@@ -71,7 +74,7 @@ pub fn char_width(c: char) -> usize {
 
 impl Screen {
     pub fn new(w: usize, h: usize) -> Self {
-        Screen { w, h, cells: vec![BLANK; w * h], prev: vec![BLANK; w * h], out: Vec::with_capacity(8192), full: true }
+        Screen { w, h, cells: vec![BLANK; w * h], prev: vec![BLANK; w * h], out: Vec::with_capacity(8192), full: true, images: Vec::new(), shown: Vec::new() }
     }
 
     pub fn resize(&mut self, w: usize, h: usize) {
@@ -80,6 +83,12 @@ impl Screen {
         self.cells = vec![BLANK; w * h];
         self.prev = vec![BLANK; w * h];
         self.full = true;
+    }
+
+    /// Images to show over the cells in the next `flush`. Only changes are
+    /// sent. Leave empty while an overlay is drawn: images sit above text.
+    pub fn set_images(&mut self, v: Vec<Placement>) {
+        self.images = v;
     }
 
     pub fn invalidate(&mut self) {
@@ -177,6 +186,8 @@ impl Screen {
         if self.full {
             out.extend_from_slice(b"\x1b[0m\x1b[2J");
             self.prev.fill(Cell { ch: '\u{1}', st: Style::default() });
+            // Clearing the screen also drops the terminal's placements.
+            self.shown.clear();
         }
         let mut cur_st: Option<Style> = None;
         let (mut cx, mut cy) = (usize::MAX, usize::MAX);
@@ -212,6 +223,14 @@ impl Screen {
             }
         }
         out.extend_from_slice(b"\x1b[0m");
+        for p in self.shown.iter().filter(|p| !self.images.iter().any(|q| q.id == p.id && q.pid == p.pid)) {
+            out.extend_from_slice(&kitty::unplace(p));
+        }
+        for p in self.images.iter().filter(|p| !self.shown.contains(p)) {
+            let _ = write!(out, "\x1b[{};{}H", p.y + 1, p.x + 1);
+            out.extend_from_slice(&kitty::place(p));
+        }
+        self.shown.clone_from(&self.images);
         if let Some((x, y, bar)) = cursor {
             let _ = write!(out, "\x1b[{};{}H", y + 1, x + 1);
             out.extend_from_slice(if bar { b"\x1b[6 q" } else { b"\x1b[2 q" });

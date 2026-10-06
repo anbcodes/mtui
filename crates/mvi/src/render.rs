@@ -17,17 +17,7 @@ const C_WARN: u8 = 214;
 const C_INFO: u8 = 110;
 
 fn kind_style(k: u8) -> Style {
-    match k {
-        sx::KEYWORD => Style::fg(176),
-        sx::TYPE => Style::fg(180),
-        sx::FUNC => Style::fg(75),
-        sx::STRING => Style::fg(114),
-        sx::NUMBER => Style::fg(173),
-        sx::COMMENT => Style::new(244, 0, ITALIC),
-        sx::MACRO => Style::fg(73),
-        sx::HEADING => Style::new(75, 0, BOLD),
-        _ => Style::default(),
-    }
+    sx::style(k)
 }
 
 fn sev_color(s: Sev) -> u8 {

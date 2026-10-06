@@ -10,6 +10,7 @@ edition = "2021"
 libc = "0.2"
 mtui = { path = "crates/mtui" }
 mhttp = { path = "crates/mhttp" }
+mimg = { path = "crates/mimg" }
 
 [profile.release]
 opt-level = 3

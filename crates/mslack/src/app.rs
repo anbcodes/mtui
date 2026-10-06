@@ -66,7 +66,15 @@ struct Msg {
     replies: u32,
     reactions: Vec<(String, u32, bool)>,
     files: Vec<String>,
+    images: Vec<Pic>,
     edited: bool,
+}
+
+/// An image attachment we can show inline.
+#[derive(Clone)]
+struct Pic {
+    name: String,
+    url: String,
 }
 
 impl Msg {
@@ -88,6 +96,10 @@ impl Msg {
             replies: v.get("reply_count").num() as u32,
             reactions: v.get("reactions").arr().iter().map(|r| (r.get("name").str().to_string(), r.get("count").num() as u32, r.get("users").arr().iter().any(|u| u.str() == me))).collect(),
             files: v.get("files").arr().iter().map(|f| f.get("name").opt_str().or(f.get("title").opt_str()).unwrap_or("file").to_string()).collect(),
+            images: v.get("files").arr().iter().filter(|f| matches!(f.get("mimetype").str(), "image/png" | "image/jpeg")).filter_map(|f| {
+                let url = ["thumb_720", "thumb_480", "thumb_360", "url_private"].iter().find_map(|k| f.get(k).opt_str())?;
+                Some(Pic { name: f.get("name").opt_str().or(f.get("title").opt_str()).unwrap_or("image").to_string(), url: url.to_string() })
+            }).collect(),
             edited: !v.get("edited").is_null(),
         }
     }
@@ -121,6 +133,8 @@ enum Row {
     Day(String),
     Text { m: usize, head: bool, a: usize, b: usize },
     Extra { m: usize, s: String, kind: Extra },
+    /// One line of an image (or its placeholder when it isn't shown yet).
+    Img { m: usize, k: usize, i: usize, of: usize },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -157,6 +171,7 @@ pub struct App {
     net: Net,
     pub quit: bool,
     pub suspend: bool,
+    gallery: mimg::Gallery,
     me: String,
     team: String,
     chans: Vec<Chan>,
@@ -248,13 +263,14 @@ fn urls(text: &str) -> Vec<String> {
 }
 
 impl App {
-    pub fn new(w: usize, h: usize, net: Net, want: Option<String>) -> App {
+    pub fn new(w: usize, h: usize, net: Net, want: Option<String>, images: bool) -> App {
         let now = Instant::now();
         let app = App {
             screen: Screen::new(w, h),
             net,
             quit: false,
             suspend: false,
+            gallery: mimg::Gallery::new(images),
             me: String::new(),
             team: String::new(),
             chans: Vec::new(),
@@ -461,6 +477,11 @@ impl App {
     }
 
     pub fn on_reply(&mut self, (tag, res): Reply) {
+        if let Tag::Image(k) = &tag {
+            let bytes = self.net.take_image(k);
+            self.gallery.arrived(k, bytes, &self.screen);
+            return;
+        }
         let key = match &tag {
             Tag::History(id, _) | Tag::Peek(id) => Some(format!("h:{}", id)),
             Tag::Replies(ts) => Some(format!("r:{}", ts)),
@@ -579,6 +600,7 @@ impl App {
                 }
                 self.load_thread();
             }
+            Tag::Image(_) => {}
             Tag::Counts => {
                 self.counts_ok = Some(true);
                 for k in ["channels", "mpims", "ims"] {
@@ -1478,8 +1500,14 @@ impl App {
             for (a, b) in wrap(&rich.text, tw) {
                 rows.push(Row::Text { m: i, head: head && rows.last().map_or(true, |r| !matches!(r, Row::Text { m: mm, .. } if *mm == i)), a, b });
             }
-            for f in &m.files {
+            for f in m.files.iter().filter(|f| !m.images.iter().any(|p| &p.name == *f)) {
                 rows.push(Row::Extra { m: i, s: format!("📎 {}", f), kind: Extra::Files });
+            }
+            for (k, p) in m.images.iter().enumerate() {
+                let of = self.gallery.size(&p.url, tw.min(60), 16).map_or(1, |s| s.1);
+                for li in 0..of {
+                    rows.push(Row::Img { m: i, k, i: li, of });
+                }
             }
             if !m.reactions.is_empty() {
                 let s = m.reactions.iter().map(chip).collect::<Vec<_>>().join(" ");
@@ -1553,7 +1581,7 @@ impl App {
         let (rows, riches) = self.build_rows(&msgs, tw, self.thread.is_some());
         self.rows_cache = rows.iter().map(|r| match r {
             Row::Day(_) => usize::MAX,
-            Row::Text { m, .. } | Row::Extra { m, .. } => *m,
+            Row::Text { m, .. } | Row::Extra { m, .. } | Row::Img { m, .. } => *m,
         }).collect();
         // fill Day rows with the following message so scrolling works
         for i in (0..self.rows_cache.len()).rev() {
@@ -1571,9 +1599,9 @@ impl App {
             }
             (None, None) => self.top = total.saturating_sub(view_h),
             (None, Some(s)) => {
-                let first = rows.iter().position(|r| matches!(r, Row::Text { m, .. } | Row::Extra { m, .. } if *m == s)).unwrap_or(0);
+                let first = rows.iter().position(|r| matches!(r, Row::Text { m, .. } | Row::Extra { m, .. } | Row::Img { m, .. } if *m == s)).unwrap_or(0);
                 let first = if first > 0 && matches!(rows[first - 1], Row::Day(_)) { first - 1 } else { first };
-                let last = rows.iter().rposition(|r| matches!(r, Row::Text { m, .. } | Row::Extra { m, .. } if *m == s)).unwrap_or(first);
+                let last = rows.iter().rposition(|r| matches!(r, Row::Text { m, .. } | Row::Extra { m, .. } | Row::Img { m, .. } if *m == s)).unwrap_or(first);
                 if last >= self.top + view_h {
                     self.top = last + 1 - view_h;
                 }
@@ -1595,9 +1623,12 @@ impl App {
         }
         self.geo.row_msg = vec![None; h];
         self.geo.hits.clear();
+        // visible span of each ready image: screen row of its first visible
+        // line, first and one-past-last line shown, and total lines
+        let mut pics: HashMap<(usize, usize), (usize, usize, usize, usize)> = HashMap::new();
         for (k, row) in rows.iter().enumerate().skip(self.top).take(view_h) {
             let y = y_top + pad + k - self.top;
-            if let Row::Text { m, .. } | Row::Extra { m, .. } = row {
+            if let Row::Text { m, .. } | Row::Extra { m, .. } | Row::Img { m, .. } = row {
                 self.geo.row_msg[y] = Some(*m);
             }
             match row {
@@ -1652,6 +1683,29 @@ impl App {
                         x = x1;
                     }
                 }
+                Row::Img { m, k: pk, i, of } => {
+                    let selected = self.is_selected(*m);
+                    let bg = if selected { BG_SEL } else { 0 };
+                    if selected {
+                        self.screen.fill(x0, w, y, Style::new(0, bg, 0));
+                        self.screen.put(x0, y, '▌', Style::new(ACCENT, bg, 0));
+                    }
+                    let p = &msgs[*m].images[*pk];
+                    if self.gallery.size(&p.url, tw.min(60), 16).is_some() {
+                        let e = pics.entry((*m, *pk)).or_insert((y, *i, *i, *of));
+                        e.2 = i + 1;
+                    } else {
+                        if self.gallery.request(&p.url) {
+                            self.net.fetch_image(&p.url, &p.url);
+                        }
+                        let note = match self.gallery.slot(&p.url) {
+                            Some(mimg::Slot::Failed(e)) => format!(" ({})", e),
+                            Some(mimg::Slot::Loading) => " …".to_string(),
+                            _ => String::new(),
+                        };
+                        self.screen.puts(tx, y, &format!("📎 {}{}", p.name, note), Style::new(250, bg, 0), w);
+                    }
+                }
                 Row::Extra { m, s, kind } => {
                     let selected = self.is_selected(*m);
                     let bg = if selected { BG_SEL } else { 0 };
@@ -1676,6 +1730,17 @@ impl App {
                 }
             }
         }
+        let overlay = matches!(self.mode, Mode::Pick(_) | Mode::Links(_) | Mode::Help) || self.comp.is_some();
+        let mut ims = Vec::new();
+        if !overlay {
+            for ((m, k), (y, i0, i1, of)) in pics {
+                let p = &msgs[m].images[k];
+                if let Some((cols, _)) = self.gallery.size(&p.url, tw.min(60), 16) {
+                    ims.extend(self.gallery.place(&p.url, (m * 4 + k + 1) as u32, (tx, y), cols, of, i0, i1));
+                }
+            }
+        }
+        self.screen.set_images(ims);
         if self.top > 0 || self.cur.is_some_and(|c| self.chans[c].more && self.thread.is_none() && self.chans[c].loaded && self.top == 0 && self.sel == Some(0)) {
             let s = if self.top > 0 { format!("↑{} ", self.top) } else { "gg/k: older ".into() };
             self.screen.puts(w.saturating_sub(str_width(&s)), 0, &s, Style::new(FG_DIM, BG_BAR, 0), w);

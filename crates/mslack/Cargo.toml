@@ -8,3 +8,4 @@ description = "A tiny Slack client for the terminal"
 libc.workspace = true
 mtui.workspace = true
 mhttp.workspace = true
+mimg.workspace = true

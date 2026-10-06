@@ -22,7 +22,13 @@ pub enum Tag {
     Pull(u64),
     Reviews(u64),
     Checks(u64),
-    Diff(u64),
+    /// A page of the PR's changed files, and its inline review comments.
+    Files(u64, u32),
+    RComments(u64),
+    /// A file's text at the PR head.
+    Content(u64, String),
+    /// Image bytes for the gallery, by key.
+    Blob(String),
     Act(&'static str),
 }
 
@@ -31,6 +37,7 @@ pub struct Resp {
     pub etag: Option<String>,
     pub body: Value,
     pub text: String,
+    pub bytes: Vec<u8>,
 }
 
 pub type Reply = (Tag, Result<Resp, String>);
@@ -55,7 +62,7 @@ pub fn base_url() -> String {
 }
 
 pub const JSON: &str = "application/vnd.github+json";
-pub const DIFF: &str = "application/vnd.github.diff";
+pub const RAW: &str = "application/vnd.github.raw+json";
 
 pub struct Req {
     pub method: &'static str,
@@ -94,7 +101,7 @@ fn run(c: &mut Client, a: &Auth, r: &Req) -> Result<Resp, String> {
             None => m,
         });
     }
-    Ok(Resp { status: res.status, etag: res.header("etag").map(String::from), body, text })
+    Ok(Resp { status: res.status, etag: res.header("etag").map(String::from), body, text, bytes: res.body })
 }
 
 impl Net {
@@ -117,12 +124,25 @@ impl Net {
         Net { auth: Arc::new(Auth { token, base: base_url() }), tx, waker, jobs }
     }
 
-    pub fn call(&self, tag: Tag, req: Req) {
+    /// Download a public image (no credentials) for the gallery.
+    pub fn fetch_image(&self, key: &str, url: &str) {
+        let (key, url) = (key.to_string(), url.to_string());
+        self.submit(move |c, _| {
+            let r = c.get_file(&url, &[("Accept", "image/png,image/jpeg,*/*")], &[], 12 << 20);
+            (Tag::Blob(key), r.map(|bytes| Resp { status: 200, etag: None, body: Value::Null, text: String::new(), bytes }))
+        });
+    }
+
+    fn submit(&self, f: impl FnOnce(&mut Client, &Auth) -> Reply + Send + 'static) {
         let n = self.clone();
         let _ = self.jobs.send(Box::new(move |c| {
-            let r = run(c, &n.auth, &req);
-            let _ = n.tx.send((tag, r));
+            let r = f(c, &n.auth);
+            let _ = n.tx.send(r);
             n.waker.wake();
         }));
+    }
+
+    pub fn call(&self, tag: Tag, req: Req) {
+        self.submit(move |c, auth| (tag, run(c, auth, &req)));
     }
 }

@@ -217,6 +217,30 @@ impl Client {
     }
 }
 
+impl Client {
+    /// GET a file, following redirects. Headers named in `private` (e.g.
+    /// Authorization, Cookie) are dropped once the redirect leaves the host.
+    pub fn get_file(&mut self, url: &str, headers: &[(&str, &str)], private: &[&str], limit: usize) -> Result<Vec<u8>, String> {
+        let mut url = url.to_string();
+        let origin = Url::parse(&url)?.host;
+        for _ in 0..5 {
+            let u = Url::parse(&url)?;
+            let same = u.host == origin;
+            let h: Vec<(&str, &str)> = headers.iter().copied().filter(|(k, _)| same || !private.iter().any(|p| p.eq_ignore_ascii_case(k))).collect();
+            let r = self.request("GET", &url, &h, b"")?;
+            match r.status {
+                200 => return if r.body.len() > limit { Err("file too large".into()) } else { Ok(r.body) },
+                301 | 302 | 303 | 307 | 308 => {
+                    let loc = r.header("location").ok_or("redirect without location")?;
+                    url = if loc.contains("://") { loc.to_string() } else if let Some(p) = loc.strip_prefix('/') { format!("{}://{}:{}/{}", if u.tls { "https" } else { "http" }, u.host, u.port, p) } else { return Err("bad redirect".into()) };
+                }
+                s => return Err(format!("HTTP {}", s)),
+            }
+        }
+        Err("too many redirects".into())
+    }
+}
+
 pub fn urlencode(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for b in s.bytes() {

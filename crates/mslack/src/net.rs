@@ -5,6 +5,7 @@
 use mhttp::{self as http, Client};
 use mtui::json::{self, Value};
 use mtui::term::Waker;
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -22,6 +23,8 @@ pub enum Tag {
     Posted(String, Option<String>),
     Done(&'static str),
     Counts,
+    /// A downloaded image; the bytes wait in `Net::blobs`.
+    Image(String),
     Peek(String),
     Mark,
     /// Socket Mode state: Ok when connected, Err(reason) when the link dropped.
@@ -54,6 +57,7 @@ pub struct Net {
     tx: Sender<Reply>,
     waker: Waker,
     jobs: Sender<Job>,
+    blobs: Arc<Mutex<HashMap<String, Result<Vec<u8>, String>>>>,
 }
 
 fn call_once(c: &mut Client, auth: &Auth, method: &str, params: &[(String, String)]) -> Result<Value, (String, u64)> {
@@ -111,7 +115,7 @@ impl Net {
                 }
             });
         }
-        Net { auth: Arc::new(Auth { token, cookie, base: base_url() }), tx, waker, jobs }
+        Net { auth: Arc::new(Auth { token, cookie, base: base_url() }), tx, waker, jobs, blobs: Default::default() }
     }
 
     fn submit(&self, f: impl FnOnce(&mut Client, &Auth) -> Reply + Send + 'static) {
@@ -121,6 +125,28 @@ impl Net {
             let _ = n.tx.send(r);
             n.waker.wake();
         }));
+    }
+
+    /// Download a Slack-hosted file (needs the token) for the image cache.
+    pub fn fetch_image(&self, key: &str, url: &str) {
+        let (key, url) = (key.to_string(), url.to_string());
+        let blobs = self.blobs.clone();
+        self.submit(move |c, auth| {
+            let bearer = format!("Bearer {}", auth.token);
+            let cookie = auth.cookie.as_ref().map(|c| format!("d={}", c));
+            let mut h = vec![("Authorization", bearer.as_str())];
+            if let Some(c) = &cookie {
+                h.push(("Cookie", c));
+            }
+            let r = c.get_file(&url, &h, &["Authorization", "Cookie"], 12 << 20);
+            blobs.lock().unwrap().insert(key.clone(), r);
+            (Tag::Image(key), Ok(Value::Null))
+        });
+    }
+
+    /// The bytes for a finished `Tag::Image`.
+    pub fn take_image(&self, key: &str) -> Result<Vec<u8>, String> {
+        self.blobs.lock().unwrap().remove(key).unwrap_or_else(|| Err("missing".into()))
     }
 
     pub fn call(&self, tag: Tag, method: &str, params: &[(&str, &str)]) {

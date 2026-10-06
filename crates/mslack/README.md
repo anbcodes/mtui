@@ -119,3 +119,7 @@ Slack's MCP server is made for AI agents. Its tools return prose summaries rathe
 * No search, no channel joining or creation, no user status or presence.
 * Block Kit messages are shown through their plain `text` or attachment fallback.
 * The emoji table covers only common shortcodes. Custom workspace emoji are shown as `:name:`.
+
+## Images
+
+PNG and JPEG attachments are shown inline in kitty, ghostty and WezTerm (not through tmux). `MTUI_IMAGES=1` forces it on, `MTUI_IMAGES=0` or `images off` in the config turns it off. Other terminals, and other file types, show as `📎 name`.

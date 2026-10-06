@@ -8,3 +8,4 @@ description = "A tiny GitHub client for the terminal"
 libc.workspace = true
 mtui.workspace = true
 mhttp.workspace = true
+mimg.workspace = true

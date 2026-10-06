@@ -56,6 +56,9 @@ pub fn enable_raw() -> io::Result<()> {
 pub fn disable_raw() {
     ACTIVE.store(false, Ordering::Relaxed);
     let mut o = io::stdout();
+    if crate::kitty::USED.load(Ordering::Relaxed) {
+        let _ = o.write_all(crate::kitty::FREE_ALL);
+    }
     let _ = o.write_all(LEAVE_SEQ.as_bytes());
     let _ = o.flush();
     if let Some(t) = *ORIG.lock().unwrap() {
@@ -115,6 +118,18 @@ impl Waker {
     fn drain(&self) {
         let mut b = [0u8; 64];
         while unsafe { libc::read(self.rd, b.as_mut_ptr() as *mut libc::c_void, b.len()) } > 0 {}
+    }
+}
+
+/// Size of one cell in pixels, if the terminal reports it.
+pub fn cell_px() -> (usize, usize) {
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(1, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 && ws.ws_xpixel > 0 && ws.ws_ypixel > 0 {
+            (ws.ws_xpixel as usize / ws.ws_col as usize, ws.ws_ypixel as usize / ws.ws_row as usize)
+        } else {
+            (8, 16)
+        }
     }
 }
 

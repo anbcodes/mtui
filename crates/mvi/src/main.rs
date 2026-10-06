@@ -5,7 +5,7 @@ mod editor;
 mod ex;
 mod picker;
 mod render;
-mod syntax;
+use mtui::syntax;
 
 use mtui::term;
 use std::io::Read;

@@ -1,0 +1,10 @@
+[package]
+name = "mimg"
+version.workspace = true
+edition.workspace = true
+description = "Image preparation for the m* tools: decode, shrink and compress for the kitty graphics protocol"
+
+[dependencies]
+mtui.workspace = true
+zune-jpeg = "0.5"
+miniz_oxide = "0.8"

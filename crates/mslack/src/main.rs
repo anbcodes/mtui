@@ -41,6 +41,7 @@ struct Creds {
     cookie: Option<String>,
     app: Option<String>,
     mouse: bool,
+    images: bool,
 }
 
 /// Tokens from the environment, falling back to the config file.
@@ -48,6 +49,7 @@ fn credentials() -> Creds {
     let env = |k: &str| std::env::var(k).ok().filter(|s| !s.is_empty());
     let (mut token, mut cookie, mut app) = (env("SLACK_TOKEN"), env("SLACK_COOKIE"), env("SLACK_APP_TOKEN"));
     let mut mouse = true;
+    let mut images = true;
     let cfg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))).map(|d| d.join("mslack/config"));
     if let Some(s) = cfg.and_then(|p| std::fs::read_to_string(p).ok()) {
         for l in s.lines() {
@@ -56,11 +58,12 @@ fn credentials() -> Creds {
                 Some(("cookie", v)) if cookie.is_none() => cookie = Some(v.trim().to_string()),
                 Some(("apptoken", v)) if app.is_none() => app = Some(v.trim().to_string()),
                 Some(("mouse", v)) => mouse = !matches!(v.trim(), "off" | "no" | "false" | "0"),
+                Some(("images", v)) => images = !matches!(v.trim(), "off" | "no" | "false" | "0"),
                 _ => {}
             }
         }
     }
-    Creds { token, cookie: cookie.map(|c| normalize_cookie(&c)).filter(|c| !c.is_empty()), app, mouse }
+    Creds { token, cookie: cookie.map(|c| normalize_cookie(&c)).filter(|c| !c.is_empty()), app, mouse, images }
 }
 
 fn main() {
@@ -75,7 +78,7 @@ fn main() {
             _ => want = Some(a),
         }
     }
-    let Creds { token: Some(token), cookie, app, mouse } = credentials() else {
+    let Creds { token: Some(token), cookie, app, mouse, images } = credentials() else {
         eprintln!("mslack: no token; set SLACK_TOKEN or add `token …` to ~/.config/mslack/config (mslack --help)");
         std::process::exit(1);
     };
@@ -100,7 +103,7 @@ fn main() {
     ws::Socket { auth, base: net::base_url(), tx: tx.clone(), waker }.spawn();
     let net = net::Net::new(token, cookie, tx, waker);
     let (w, h) = term::size();
-    let mut app = app::App::new(w, h, net, want);
+    let mut app = app::App::new(w, h, net, want, images);
 
     term::set_mouse(mouse);
     if let Err(e) = term::enable_raw() {

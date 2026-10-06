@@ -1,13 +1,17 @@
 // mgh state, keys and drawing.
 
+mod review;
+
 use crate::api::{self, Net, Reply, Req, Tag};
+use review::{Content, FileDiff, Pending, RComment, Rev};
 use mtui::fuzzy;
 use mtui::json::{self, Value};
 use mtui::lineedit::LineEdit;
-use mtui::picker::{Pick, Picker};
+use mtui::picker::{Label, Pick, Picker};
 use mtui::screen::{Screen, Style, BOLD, ITALIC, };
 use mtui::term::{Key, Mouse, MouseKind};
 use mtui::wrap::{str_width, wrap};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 const FG_DIM: u8 = 242;
@@ -40,12 +44,21 @@ lists:
 tabs: 1 review requested, 2 my PRs, 3 my issues, 4 inbox, 5 repo
 item:
   j k C-d C-u  scroll              g G  top / bottom
-  d            toggle the diff     ] [  next / prev file in diff
-  c            comment             a  approve
-  X            request changes     x  close / reopen
+  d            review the code     c  comment
+  a            approve             X  request changes
+  x            close / reopen
   M            merge (m merge, s squash, r rebase)
   o y r        browser, copy URL, refresh
   q Esc h      back
+review (d):
+  j k C-d C-u  move / page         g G  top / bottom   h l  scroll sideways
+  ] [ Tab      next / prev file    f  pick a file      m  mark viewed, next
+  } {          next / prev hunk    n N  next / prev comment
+  e            whole file          v  select lines     Esc  clear selection
+  c            comment on the line(s), queued in a pending review
+  r            reply to the thread x  drop a pending comment on the line
+  S            submit: comment     a approve  X request changes (with pending)
+  o            open on GitHub      q  back to the item
 mouse:
   click        tab or row          double-click  open
   wheel        scroll              shift+drag    select text (terminal)
@@ -173,8 +186,8 @@ struct Detail {
     comments: Vec<Value>,
     reviews: Vec<Value>,
     checks: Value,
-    diff: Option<String>,
-    show_diff: bool,
+    rev: Rev,
+    review: bool,
     scroll: usize,
     ver: u64,
     err: Option<String>,
@@ -184,10 +197,12 @@ struct DL {
     ind: usize,
     text: String,
     st: Style,
+    /// An inline image: shown in place of `text` once it's loaded.
+    img: Option<String>,
 }
 
 fn dl(ind: usize, text: impl Into<String>, st: Style) -> DL {
-    DL { ind, text: text.into(), st }
+    DL { ind, text: text.into(), st, img: None }
 }
 
 impl Detail {
@@ -202,34 +217,10 @@ impl Detail {
         self.pull.get("merged").bool()
     }
 
-    fn doc(&self) -> Vec<DL> {
+    fn doc(&self, images: bool) -> Vec<DL> {
         let plain = Style::default();
         let dim = Style::new(FG_DIM, 0, 0);
         let mut d = Vec::new();
-        if self.show_diff {
-            return match &self.diff {
-                None => vec![dl(0, "loading diff…", Style::new(FG_DIM, 0, ITALIC))],
-                Some(t) => t
-                    .lines()
-                    .map(|l| {
-                        let st = if l.starts_with("diff --git") {
-                            Style::new(ACCENT, 0, BOLD)
-                        } else if l.starts_with("+++") || l.starts_with("---") || l.starts_with("index ") || l.starts_with("new file") || l.starts_with("deleted file") || l.starts_with("similarity") || l.starts_with("rename ") {
-                            Style::new(FG_DIM, 0, BOLD)
-                        } else if l.starts_with("@@") {
-                            Style::fg(73)
-                        } else if l.starts_with('+') {
-                            Style::fg(C_OK)
-                        } else if l.starts_with('-') {
-                            Style::fg(C_BAD)
-                        } else {
-                            plain
-                        };
-                        dl(0, l, st)
-                    })
-                    .collect(),
-            };
-        }
         let it = &self.item;
         let title = self.issue.get("title").opt_str().unwrap_or(&it.title);
         d.push(dl(0, format!("{} #{}  {}", it.repo, it.num, title), Style::new(255, 0, BOLD)));
@@ -304,7 +295,7 @@ impl Detail {
         } else if body.trim().is_empty() {
             d.push(dl(0, "(no description)", Style::new(FG_DIM, 0, ITALIC)));
         } else {
-            markdown(body, 0, &mut d);
+            markdown(body, 0, &mut d, images);
         }
         let mut tl: Vec<(&str, &str, String, &Value)> = Vec::new();
         for c in &self.comments {
@@ -330,15 +321,56 @@ impl Detail {
             d.push(dl(0, x, Style::new(name_color(who), 0, BOLD)));
             let b = v.get("body").str();
             if !b.trim().is_empty() {
-                markdown(b, 2, &mut d);
+                markdown(b, 2, &mut d, images);
             }
         }
         d
     }
 }
 
-/// Light markdown styling: fences, headings, quotes. Everything else is text.
-fn markdown(s: &str, ind: usize, d: &mut Vec<DL>) {
+/// Pull `![alt](url)` and `<img src="url">` out of a line. Returns the line
+/// with each replaced by `[alt]`, and the (alt, url) pairs.
+fn split_images(l: &str) -> (String, Vec<(String, String)>) {
+    let (mut out, mut found) = (String::new(), Vec::new());
+    let mut rest = l;
+    loop {
+        let md = rest.find("![");
+        let html = rest.find("<img");
+        let Some(i) = [md, html].into_iter().flatten().min() else { break };
+        let (alt, url, end) = if Some(i) == md {
+            let r = &rest[i + 2..];
+            let Some(c) = r.find("](") else { break };
+            let u = &r[c + 2..];
+            let Some(e) = u.find(')') else { break };
+            (r[..c].to_string(), u[..e].split_whitespace().next().unwrap_or("").to_string(), i + 2 + c + 2 + e + 1)
+        } else {
+            let r = &rest[i..];
+            let Some(e) = r.find('>') else { break };
+            let tag = &r[..e];
+            let attr = |n: &str| {
+                let p = tag.find(&format!("{}=", n))? + n.len() + 1;
+                let q = tag[p..].chars().next()?;
+                let v = &tag[p + 1..];
+                Some(v[..v.find(q)?].to_string())
+            };
+            (attr("alt").unwrap_or_default(), attr("src").unwrap_or_default(), i + e + 1)
+        };
+        out.push_str(&rest[..i]);
+        if url.starts_with("http") {
+            out.push_str(&format!("[{}]", if alt.is_empty() { "image" } else { &alt }));
+            found.push((alt, url));
+        } else {
+            out.push_str(&rest[i..end]);
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    (out, found)
+}
+
+/// Light markdown styling: fences, headings, quotes, and inline images (when
+/// `images` is on). Everything else is text.
+fn markdown(s: &str, ind: usize, d: &mut Vec<DL>, images: bool) {
     let mut fence = false;
     for l in s.lines() {
         let l = l.trim_end_matches('\r');
@@ -351,17 +383,37 @@ fn markdown(s: &str, ind: usize, d: &mut Vec<DL>) {
             d.push(dl(ind, l.trim_start_matches('#').trim_start(), Style::new(ACCENT, 0, BOLD)));
         } else if l.starts_with('>') {
             d.push(dl(ind, l, Style::new(FG_DIM, 0, ITALIC)));
+        } else if images && (l.contains("![") || l.contains("<img")) {
+            let (text, found) = split_images(l);
+            if !text.trim().is_empty() && !(found.len() == 1 && text.trim() == format!("[{}]", if found[0].0.is_empty() { "image" } else { &found[0].0 })) {
+                d.push(dl(ind, text, Style::default()));
+            }
+            for (alt, url) in found {
+                d.push(DL { ind, text: alt, st: Style::default(), img: Some(url) });
+            }
         } else {
             d.push(dl(ind, l, Style::default()));
         }
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Purpose {
     Comment,
     Approve,
     Changes,
+    /// Submit the pending comments with a summary and no verdict.
+    Review,
+    /// A line comment, queued in the pending review.
+    Inline { path: String, line: u32, start: Option<u32>, right: bool },
+    Reply(u64),
+}
+
+struct FileItem(String, usize);
+impl Label for FileItem {
+    fn label(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -376,6 +428,7 @@ enum Mode {
     Compose(Purpose, LineEdit),
     Confirm(Confirm),
     Pick(Picker<String>),
+    Files(Picker<FileItem>),
     Help,
 }
 
@@ -392,6 +445,8 @@ pub struct App {
     net: Net,
     pub quit: bool,
     pub suspend: bool,
+    gallery: mimg::Gallery,
+    drafts: HashMap<(String, u64), Vec<Pending>>,
     me: String,
     repo: Option<String>,
     tab: usize,
@@ -413,12 +468,14 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(w: usize, h: usize, net: Net, repo: Option<String>, explicit: bool) -> App {
+    pub fn new(w: usize, h: usize, net: Net, repo: Option<String>, explicit: bool, images: bool) -> App {
         let mut app = App {
             screen: Screen::new(w, h),
             net,
             quit: false,
             suspend: false,
+            gallery: mimg::Gallery::new(images),
+            drafts: HashMap::new(),
             me: String::new(),
             tab: if explicit { REPO_TAB } else { 0 },
             repo,
@@ -572,33 +629,37 @@ impl App {
                 }
             }
         }
-        self.detail = Some(Detail { gen: g, item: it, issue: Value::Null, pull: Value::Null, comments: Vec::new(), reviews: Vec::new(), checks: Value::Null, diff: None, show_diff: false, scroll: 0, ver: 0, err: None });
+        self.detail = Some(Detail { gen: g, item: it, issue: Value::Null, pull: Value::Null, comments: Vec::new(), reviews: Vec::new(), checks: Value::Null, rev: Rev::default(), review: false, scroll: 0, ver: 0, err: None });
         self.info("");
     }
 
     fn reload_detail(&mut self) {
-        let Some(d) = self.detail.take() else { return };
-        let (show, scroll) = (d.show_diff, d.scroll);
+        let Some(mut d) = self.detail.take() else { return };
+        let (review, scroll, rev) = (d.review, d.scroll, std::mem::take(&mut d.rev));
+        let had_files = rev.files.is_some();
         self.open_item(d.item);
         if let Some(d) = &mut self.detail {
             d.scroll = scroll;
-            if show {
-                d.show_diff = true;
-                self.fetch_diff();
-            }
+            d.review = review;
+            d.rev = rev;
+            d.rev.ver += 1;
+        }
+        if had_files {
+            self.fetch_review();
         }
     }
 
-    fn fetch_diff(&mut self) {
+    /// Request the PR's changed files and inline comments.
+    fn fetch_review(&mut self) {
         let Some(d) = &self.detail else { return };
-        let req = Req { accept: api::DIFF, ..Req::get(format!("/repos/{}/pulls/{}", d.item.repo, d.item.num)) };
-        let g = d.gen;
-        self.call(Tag::Diff(g), req);
+        let (g, r, n) = (d.gen, d.item.repo.clone(), d.item.num);
+        self.call(Tag::Files(g, 1), Req::get(format!("/repos/{}/pulls/{}/files?per_page=100", r, n)));
+        self.call(Tag::RComments(g), Req::get(format!("/repos/{}/pulls/{}/comments?per_page=100", r, n)));
     }
 
     fn on_detail(&mut self, tag: Tag, res: Result<api::Resp, String>) {
         let g = match tag {
-            Tag::Issue(g) | Tag::Comments(g) | Tag::Pull(g) | Tag::Reviews(g) | Tag::Checks(g) | Tag::Diff(g) => g,
+            Tag::Issue(g) | Tag::Comments(g) | Tag::Pull(g) | Tag::Reviews(g) | Tag::Checks(g) | Tag::Files(g, _) | Tag::RComments(g) | Tag::Content(g, _) => g,
             _ => return,
         };
         let Some(d) = self.detail.as_mut().filter(|d| d.gen == g) else { return };
@@ -606,7 +667,12 @@ impl App {
         let r = match res {
             Ok(r) => r,
             Err(e) => {
-                d.err = Some(format!("{}", e));
+                if let Tag::Content(_, path) = &tag {
+                    d.rev.contents.insert(path.clone(), Content::Failed(e));
+                    d.rev.ver += 1;
+                } else {
+                    d.err = Some(e);
+                }
                 return;
             }
         };
@@ -618,7 +684,28 @@ impl App {
             Tag::Issue(_) => d.issue = r.body,
             Tag::Comments(_) => d.comments = list(r.body),
             Tag::Reviews(_) => d.reviews = list(r.body),
-            Tag::Diff(_) => d.diff = Some(r.text),
+            Tag::Files(_, page) => {
+                let files = d.rev.files.get_or_insert_with(Vec::new);
+                if page == 1 {
+                    files.clear();
+                }
+                let n = r.body.arr().len();
+                files.extend(r.body.arr().iter().map(FileDiff::from_json));
+                d.rev.ver += 1;
+                if n >= 100 && page < 3 {
+                    let req = Req::get(format!("/repos/{}/pulls/{}/files?per_page=100&page={}", d.item.repo, d.item.num, page + 1));
+                    self.call(Tag::Files(g, page + 1), req);
+                }
+            }
+            Tag::RComments(_) => {
+                d.rev.comments = r.body.arr().iter().map(RComment::from_json).collect();
+                d.rev.ver += 1;
+            }
+            Tag::Content(_, path) => {
+                let lines = r.text.lines().map(String::from).collect();
+                d.rev.contents.insert(path, Content::Text(lines));
+                d.rev.ver += 1;
+            }
             Tag::Checks(_) => d.checks = r.body,
             Tag::Pull(_) => {
                 let sha = r.body.path("head.sha").str().to_string();
@@ -653,18 +740,38 @@ impl App {
     }
 
     fn send_compose(&mut self, p: Purpose, text: &str) {
-        let Some(d) = &self.detail else { return };
+        let Some(d) = &mut self.detail else { return };
         let (r, n) = (d.item.repo.clone(), d.item.num);
         let text = text.trim();
         if text.is_empty() && p != Purpose::Approve {
             return self.error("empty message");
         }
         let b = json::quote(text);
-        match p {
-            Purpose::Comment => self.act("commented", Req::send("POST", format!("/repos/{}/issues/{}/comments", r, n), format!("{{\"body\":{}}}", b))),
-            Purpose::Approve => self.act("approved", Req::send("POST", format!("/repos/{}/pulls/{}/reviews", r, n), format!("{{\"event\":\"APPROVE\",\"body\":{}}}", b))),
-            Purpose::Changes => self.act("requested changes", Req::send("POST", format!("/repos/{}/pulls/{}/reviews", r, n), format!("{{\"event\":\"REQUEST_CHANGES\",\"body\":{}}}", b))),
+        let event = match &p {
+            Purpose::Comment => return self.act("commented", Req::send("POST", format!("/repos/{}/issues/{}/comments", r, n), format!("{{\"body\":{}}}", b))),
+            Purpose::Reply(id) => return self.act("replied", Req::send("POST", format!("/repos/{}/pulls/{}/comments/{}/replies", r, n, id), format!("{{\"body\":{}}}", b))),
+            Purpose::Inline { path, line, start, right } => {
+                let list = self.drafts.entry((r, n)).or_default();
+                list.push(Pending { path: path.clone(), line: *line, start: *start, right: *right, body: text.to_string() });
+                let k = list.len();
+                d.rev.anchor = None;
+                d.rev.ver += 1;
+                return self.info(format!("comment queued ({} pending); S submits the review", k));
+            }
+            Purpose::Approve => ("APPROVE", "approved"),
+            Purpose::Changes => ("REQUEST_CHANGES", "requested changes"),
+            Purpose::Review => ("COMMENT", "reviewed"),
+        };
+        let sha = d.pull.path("head.sha").str().to_string();
+        let mut comments = Vec::new();
+        for c in self.drafts.get(&(r.clone(), n)).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let side = if c.right { "RIGHT" } else { "LEFT" };
+            let start = c.start.map_or(String::new(), |s| format!(",\"start_line\":{},\"start_side\":\"{}\"", s, side));
+            comments.push(format!("{{\"path\":{},\"line\":{},\"side\":\"{}\"{},\"body\":{}}}", json::quote(&c.path), c.line, side, start, json::quote(&c.body)));
         }
+        let commit = if sha.is_empty() { String::new() } else { format!("\"commit_id\":{},", json::quote(&sha)) };
+        let body = format!("{{{}\"event\":\"{}\",\"body\":{},\"comments\":[{}]}}", commit, event.0, b, comments.join(","));
+        self.act(event.1, Req::send("POST", format!("/repos/{}/pulls/{}/reviews", r, n), body));
     }
 
     fn confirm_key(&mut self, c: Confirm, k: Key) {
@@ -737,8 +844,19 @@ impl App {
                     self.error(format!("repos: {}", e));
                 }
             },
+            Tag::Blob(key) => {
+                self.gallery.arrived(&key, res.map(|r| r.bytes), &self.screen);
+                if let Some(d) = &mut self.detail {
+                    d.rev.ver += 1;
+                }
+            }
             Tag::Act(label) => match res {
                 Ok(_) => {
+                    if matches!(label, "approved" | "requested changes" | "reviewed") {
+                        if let Some(d) = &self.detail {
+                            self.drafts.remove(&(d.item.repo.clone(), d.item.num));
+                        }
+                    }
                     if label != "marked read" {
                         self.info(label);
                         if self.detail.is_some() {
@@ -788,7 +906,7 @@ impl App {
                     self.mode = Mode::Normal;
                     return;
                 }
-                Mode::Pick(_) => {}
+                Mode::Pick(_) | Mode::Files(_) => {}
                 _ => return,
             }
         }
@@ -824,6 +942,15 @@ impl App {
                     if let Some(r) = r {
                         self.detail = None;
                         self.set_repo(r);
+                    }
+                }
+            },
+            Mode::Files(mut p) => match p.key(&k) {
+                Pick::Continue => self.mode = Mode::Files(p),
+                Pick::Cancel => {}
+                Pick::Accept => {
+                    if let (Some(it), Some(d)) = (p.selected(), &mut self.detail) {
+                        d.rev.select_file(it.1);
                     }
                 }
             },
@@ -879,19 +1006,14 @@ impl App {
     }
 
     fn detail_key(&mut self, k: Key, g: bool) {
+        if self.detail.as_ref().is_some_and(|d| d.review) {
+            return self.review_key(k, g);
+        }
         let page = (self.screen.h.saturating_sub(2) / 2).max(1) as isize;
         let Some(d) = &mut self.detail else { return };
-        let show_diff = d.show_diff;
         let scroll = |d: &mut Detail, by: isize| d.scroll = (d.scroll as isize + by).max(0) as usize;
         match k {
-            Key::Char('q') | Key::Esc | Key::Char('h') | Key::Left => {
-                if show_diff {
-                    d.show_diff = false;
-                    d.scroll = 0;
-                } else {
-                    self.close_detail();
-                }
-            }
+            Key::Char('q') | Key::Esc | Key::Char('h') | Key::Left => self.close_detail(),
             Key::Char('?') => self.mode = Mode::Help,
             Key::Char('j') | Key::Down | Key::Ctrl('n') | Key::Enter => scroll(d, 1),
             Key::Char('k') | Key::Up | Key::Ctrl('p') => scroll(d, -1),
@@ -902,19 +1024,9 @@ impl App {
             Key::Char('g') if g => d.scroll = 0,
             Key::Char('g') => self.pending_g = true,
             Key::Char('d') if d.item.pr => {
-                d.show_diff = !show_diff;
-                d.scroll = 0;
-                if d.show_diff && d.diff.is_none() {
-                    self.fetch_diff();
-                }
-            }
-            Key::Char(c @ (']' | '[')) if show_diff => {
-                let starts: Vec<usize> = self.diff_starts();
-                let Some(d) = &mut self.detail else { return };
-                let cur = d.scroll;
-                let t = if c == ']' { starts.iter().copied().find(|&s| s > cur) } else { starts.iter().copied().rev().find(|&s| s < cur) };
-                if let Some(t) = t {
-                    d.scroll = t;
+                d.review = true;
+                if d.rev.files.is_none() {
+                    self.fetch_review();
                 }
             }
             Key::Char('c') => self.compose(Purpose::Comment),
@@ -932,22 +1044,10 @@ impl App {
         }
     }
 
-    /// Wrapped-row index of each `diff --git` header at the last drawn width.
-    fn diff_starts(&self) -> Vec<usize> {
-        let Some(d) = &self.detail else { return Vec::new() };
-        let w = self.screen.w;
-        let mut row = 0;
-        let mut v = Vec::new();
-        for l in d.doc() {
-            if l.text.starts_with("diff --git") {
-                v.push(row);
-            }
-            row += wrap(&l.text, w.saturating_sub(l.ind).max(1)).len();
-        }
-        v
-    }
-
     fn mouse(&mut self, m: Mouse) {
+        if self.detail.as_ref().is_some_and(|d| d.review) {
+            return self.review_mouse(m);
+        }
         if let Some(d) = &mut self.detail {
             match m.kind {
                 MouseKind::WheelUp => d.scroll = d.scroll.saturating_sub(3),
@@ -1000,6 +1100,9 @@ impl App {
                 Purpose::Comment => "comment› ",
                 Purpose::Approve => "approve› ",
                 Purpose::Changes => "changes› ",
+                Purpose::Review => "review› ",
+                Purpose::Inline { .. } => "line› ",
+                Purpose::Reply(_) => "reply› ",
             };
             let pw = str_width(prompt);
             let rows = e.height(w.saturating_sub(pw + 1), 0).clamp(1, (h / 3).max(1));
@@ -1012,10 +1115,13 @@ impl App {
             cursor = Some((cx, cy, true));
         }
 
-        if self.detail.is_some() {
-            self.render_detail(bottom);
-        } else {
-            self.render_list(bottom);
+        match &self.detail {
+            Some(d) if d.review => self.render_review(bottom),
+            Some(_) => self.render_detail(bottom),
+            None => {
+                self.screen.set_images(Vec::new());
+                self.render_list(bottom);
+            }
         }
 
         // status line
@@ -1023,9 +1129,9 @@ impl App {
             Mode::Filter(_) => (" FILTER ", 108),
             Mode::Compose(..) => (" COMPOSE ", 108),
             Mode::Confirm(_) => (" CONFIRM ", 203),
-            Mode::Pick(_) => (" PICK ", 180),
+            Mode::Pick(_) | Mode::Files(_) => (" PICK ", 180),
             _ => match &self.detail {
-                Some(d) if d.show_diff => (" DIFF ", 73),
+                Some(d) if d.review => (" REVIEW ", 73),
                 Some(_) => (" ITEM ", 110),
                 None => (" LIST ", 110),
             },
@@ -1053,11 +1159,16 @@ impl App {
                 self.screen.puts(x, y_status, &s, st, w);
             }
         }
-        let right = format!("{}{}{}? help ", if self.pending > 0 { "… " } else { "" }, self.me, if self.me.is_empty() { "" } else { "  " });
+        let drafts = self.detail.as_ref().and_then(|d| self.drafts.get(&(d.item.repo.clone(), d.item.num))).map_or(0, |v| v.len());
+        let right = format!("{}{}{}{}? help ", if self.pending > 0 { "… " } else { "" }, if drafts > 0 { format!("{} pending  ", drafts) } else { String::new() }, self.me, if self.me.is_empty() { "" } else { "  " });
         self.screen.puts(w.saturating_sub(str_width(&right)), y_status, &right, Style::new(FG_DIM, BG_BAR, 0), w);
 
         match &mut self.mode {
             Mode::Pick(p) => {
+                let (x, y) = p.draw(&mut self.screen, y_status);
+                cursor = Some((x, y, true));
+            }
+            Mode::Files(p) => {
                 let (x, y) = p.draw(&mut self.screen, y_status);
                 cursor = Some((x, y, true));
             }
@@ -1074,6 +1185,9 @@ impl App {
                 cursor = None;
             }
             _ => {}
+        }
+        if matches!(self.mode, Mode::Pick(_) | Mode::Files(_) | Mode::Help) {
+            self.screen.set_images(Vec::new());
         }
         self.screen.flush(cursor);
     }
@@ -1165,27 +1279,71 @@ impl App {
 
     fn render_detail(&mut self, bottom: usize) {
         let w = self.screen.w;
+        let images = self.gallery.enabled;
         let Some(d) = &mut self.detail else { return };
-        let doc = d.doc();
-        let mut rows: Vec<(usize, &str, Style)> = Vec::new();
-        for l in &doc {
+        let doc = d.doc(images);
+        let view_h = bottom.saturating_sub(1);
+        // text rows, or one line of an inline image (doc index, line, lines)
+        enum R<'a> {
+            T(usize, &'a str, Style),
+            I(usize, usize, usize, usize),
+        }
+        let mut rows: Vec<R> = Vec::new();
+        for (di, l) in doc.iter().enumerate() {
+            if let Some(url) = &l.img {
+                let of = self.gallery.size(url, w.saturating_sub(l.ind + 2).min(60), 14).map_or(1, |s| s.1);
+                rows.extend((0..of).map(|i| R::I(di, l.ind, i, of)));
+                continue;
+            }
             for (a, b) in wrap(&l.text, w.saturating_sub(l.ind + 1).max(1)) {
-                rows.push((l.ind, &l.text[a..b], l.st));
+                rows.push(R::T(l.ind, &l.text[a..b], l.st));
             }
         }
-        let view_h = bottom.saturating_sub(1);
         d.scroll = d.scroll.min(rows.len().saturating_sub(view_h));
         self.screen.fill(0, w, 0, Style::new(252, BG_BAR, 0));
-        let title = format!(" {} #{}{} ", d.item.repo, d.item.num, if d.show_diff { " diff" } else { "" });
+        let title = format!(" {} #{} ", d.item.repo, d.item.num);
         self.screen.puts(0, 0, &title, Style::new(255, BG_BAR, BOLD), w);
         if rows.len() > view_h {
             let s = format!("{}% ", (d.scroll + view_h) * 100 / rows.len());
             self.screen.puts(w.saturating_sub(s.len()), 0, &s, Style::new(FG_DIM, BG_BAR, 0), w);
         }
-        for (k, (ind, t, st)) in rows.iter().enumerate().skip(d.scroll).take(view_h) {
+        let mut pics: HashMap<usize, (usize, usize, usize, usize, usize)> = HashMap::new();
+        for (k, r) in rows.iter().enumerate().skip(d.scroll).take(view_h) {
             let y = 1 + k - d.scroll;
-            self.screen.puts(1 + ind, y, t, *st, w);
+            match r {
+                R::T(ind, t, st) => {
+                    self.screen.puts(1 + ind, y, t, *st, w);
+                }
+                R::I(di, ind, i, of) => {
+                    let url = doc[*di].img.as_deref().unwrap_or("");
+                    if self.gallery.size(url, w.saturating_sub(ind + 2).min(60), 14).is_some() {
+                        let e = pics.entry(*di).or_insert((y, *ind, *i, *i, *of));
+                        e.3 = i + 1;
+                    } else {
+                        if self.gallery.request(url) {
+                            self.net.fetch_image(url, url);
+                        }
+                        let note = match self.gallery.slot(url) {
+                            Some(mimg::Slot::Failed(e)) => format!(" ({})", e),
+                            Some(mimg::Slot::Loading) => " …".to_string(),
+                            _ => String::new(),
+                        };
+                        let alt = if doc[*di].text.is_empty() { "image" } else { &doc[*di].text };
+                        self.screen.puts(1 + ind, y, &format!("🖼 {}{}", alt, note), Style::new(C_LINK, 0, 0), w);
+                    }
+                }
+            }
         }
+        let mut ims = Vec::new();
+        if !matches!(self.mode, Mode::Pick(_) | Mode::Files(_) | Mode::Help) {
+            for (di, (y, ind, i0, i1, of)) in pics {
+                let url = doc[di].img.as_deref().unwrap_or("");
+                if let Some((cols, _)) = self.gallery.size(url, w.saturating_sub(ind + 2).min(60), 14) {
+                    ims.extend(self.gallery.place(url, di as u32 + 1, (1 + ind, y), cols, of, i0, i1));
+                }
+            }
+        }
+        self.screen.set_images(ims);
     }
 }
 
@@ -1202,6 +1360,13 @@ mod tests {
         assert_eq!(age_at("2026-10-06T11:25:42Z", t + 3 * 3600), "3h");
         assert_eq!(age_at("2026-10-06T11:25:42Z", t + 3 * 86400), "3d");
         assert_eq!(age_at("garbage", t), "");
+    }
+
+    #[test]
+    fn image_links() {
+        let (t, f) = split_images("see ![shot](https://x.io/a.png) and <img width=3 alt=\"b\" src=\"https://x.io/b.jpg\"> ok ![rel](a.png)");
+        assert_eq!(t, "see [shot] and [b] ok ![rel](a.png)");
+        assert_eq!(f, vec![("shot".to_string(), "https://x.io/a.png".to_string()), ("b".to_string(), "https://x.io/b.jpg".to_string())]);
     }
 
     #[test]

@@ -29,17 +29,20 @@ fn config_dir(name: &str) -> Option<PathBuf> {
 struct Creds {
     token: Option<String>,
     mouse: bool,
+    images: bool,
 }
 
 fn credentials() -> Creds {
     let env = |k: &str| std::env::var(k).ok().filter(|s| !s.is_empty());
     let mut token = env("GITHUB_TOKEN").or_else(|| env("GH_TOKEN"));
     let mut mouse = true;
+    let mut images = true;
     if let Some(s) = config_dir("mgh/config").and_then(|p| std::fs::read_to_string(p).ok()) {
         for l in s.lines() {
             match l.trim().split_once(char::is_whitespace) {
                 Some(("token", v)) if token.is_none() => token = Some(v.trim().to_string()),
                 Some(("mouse", v)) => mouse = !matches!(v.trim(), "off" | "no" | "false" | "0"),
+                Some(("images", v)) => images = !matches!(v.trim(), "off" | "no" | "false" | "0"),
                 _ => {}
             }
         }
@@ -47,7 +50,7 @@ fn credentials() -> Creds {
     if token.is_none() {
         token = config_dir("gh/hosts.yml").and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| s.lines().find_map(|l| l.trim().strip_prefix("oauth_token:").map(|t| t.trim().to_string())));
     }
-    Creds { token: token.filter(|t| !t.is_empty()), mouse }
+    Creds { token: token.filter(|t| !t.is_empty()), mouse, images }
 }
 
 /// OWNER/REPO from a git remote URL (https or ssh form).
@@ -76,7 +79,7 @@ fn main() {
             _ => want = Some(a),
         }
     }
-    let Creds { token: Some(token), mouse } = credentials() else {
+    let Creds { token: Some(token), mouse, images } = credentials() else {
         eprintln!("mgh: no token; set GITHUB_TOKEN or add `token …` to ~/.config/mgh/config (mgh --help)");
         std::process::exit(1);
     };
@@ -91,7 +94,7 @@ fn main() {
     let net = api::Net::new(token, tx, waker);
     let (w, h) = term::size();
     let explicit = want.is_some();
-    let mut app = app::App::new(w, h, net, want.or_else(origin_repo), explicit);
+    let mut app = app::App::new(w, h, net, want.or_else(origin_repo), explicit, images);
 
     term::set_mouse(mouse);
     if let Err(e) = term::enable_raw() {

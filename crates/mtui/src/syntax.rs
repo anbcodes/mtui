@@ -566,3 +566,19 @@ pub fn highlight(lang: &Lang, line: &str, mut st: State, out: &mut Vec<u8>) -> S
     }
     st
 }
+
+/// The shared color for a highlight class.
+pub fn style(k: u8) -> crate::screen::Style {
+    use crate::screen::{Style, BOLD, ITALIC};
+    match k {
+        KEYWORD => Style::fg(176),
+        TYPE => Style::fg(180),
+        FUNC => Style::fg(75),
+        STRING => Style::fg(114),
+        NUMBER => Style::fg(173),
+        COMMENT => Style::new(244, 0, ITALIC),
+        MACRO => Style::fg(73),
+        HEADING => Style::new(75, 0, BOLD),
+        _ => Style::default(),
+    }
+}
