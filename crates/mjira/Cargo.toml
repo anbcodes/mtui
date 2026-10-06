@@ -1,0 +1,11 @@
+[package]
+name = "mjira"
+version.workspace = true
+edition.workspace = true
+description = "A tiny Jira client for the terminal: lists, a board, issues, transitions and comments"
+
+[dependencies]
+libc.workspace = true
+mtui.workspace = true
+mhttp.workspace = true
+mimg.workspace = true
