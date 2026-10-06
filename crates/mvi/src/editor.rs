@@ -136,6 +136,7 @@ pub struct Editor {
     pub comp: Option<Completion>,
     sym_cache: Option<HashMap<String, String>>,
     pub picker: Option<Picker>,
+    pub preview: Option<crate::preview::Preview>,
     pub check_id: u64,
     pub check_running: bool,
     pub check_cwd: PathBuf,
@@ -339,6 +340,7 @@ impl Editor {
             comp: None,
             sym_cache: None,
             picker: None,
+            preview: None,
             check_id: 0,
             check_running: false,
             check_cwd: PathBuf::new(),
@@ -1493,6 +1495,9 @@ impl Editor {
                 }
                 return;
             }
+            if self.preview.is_some() {
+                return self.preview_mouse(m);
+            }
             if self.picker.is_some() {
                 return self.picker_key(k);
             }
@@ -1517,6 +1522,9 @@ impl Editor {
             if matches!(k, Key::Esc | Key::Enter | Key::Char(' ') | Key::Char('q')) {
                 return;
             }
+        }
+        if self.preview.is_some() {
+            return self.preview_key(k);
         }
         if self.picker.is_some() {
             self.picker_key(k);

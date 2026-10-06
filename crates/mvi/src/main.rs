@@ -4,6 +4,7 @@ mod diag;
 mod editor;
 mod ex;
 mod picker;
+mod preview;
 mod render;
 use mtui::syntax;
 

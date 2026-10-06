@@ -25,7 +25,6 @@ const C_BAD: u8 = 203;
 const C_WARN: u8 = 179;
 const C_MERGED: u8 = 176;
 const C_LINK: u8 = 75;
-const C_CODE: u8 = 180;
 const NAME_COLORS: [u8; 12] = [167, 173, 179, 143, 107, 72, 74, 110, 104, 140, 175, 139];
 
 /// Lists are re-fetched this often; unchanged ones answer 304.
@@ -48,6 +47,7 @@ code (tab 6):
   j k Enter    move, open folder/file   h  collapse / parent
   / C-p        find a file         Tab  tree <-> file   b  hide the tree
   file: j k C-d C-u g G scroll the cursor, h l sideways, o browser, y copy link to the line
+  m            markdown files: rendered <-> source
   r reload the tree
 tabs: 1 review requested, 2 my PRs, 3 my issues, 4 inbox, 5 repo, 6 code
 item:
@@ -206,12 +206,12 @@ struct DL {
     ind: usize,
     text: String,
     st: Style,
-    /// An inline image: shown in place of `text` once it's loaded.
-    img: Option<String>,
+    /// `text` is markdown, rendered to the pane's width when drawn.
+    md: bool,
 }
 
 fn dl(ind: usize, text: impl Into<String>, st: Style) -> DL {
-    DL { ind, text: text.into(), st, img: None }
+    DL { ind, text: text.into(), st, md: false }
 }
 
 impl Detail {
@@ -226,7 +226,7 @@ impl Detail {
         self.pull.get("merged").bool()
     }
 
-    fn doc(&self, images: bool) -> Vec<DL> {
+    fn doc(&self) -> Vec<DL> {
         let plain = Style::default();
         let dim = Style::new(FG_DIM, 0, 0);
         let mut d = Vec::new();
@@ -304,7 +304,7 @@ impl Detail {
         } else if body.trim().is_empty() {
             d.push(dl(0, "(no description)", Style::new(FG_DIM, 0, ITALIC)));
         } else {
-            markdown(body, 0, &mut d, images);
+            d.push(DL { ind: 0, text: body.to_string(), st: Style::default(), md: true });
         }
         let mut tl: Vec<(&str, &str, String, &Value)> = Vec::new();
         for c in &self.comments {
@@ -330,79 +330,10 @@ impl Detail {
             d.push(dl(0, x, Style::new(name_color(who), 0, BOLD)));
             let b = v.get("body").str();
             if !b.trim().is_empty() {
-                markdown(b, 2, &mut d, images);
+                d.push(DL { ind: 2, text: b.to_string(), st: Style::default(), md: true });
             }
         }
         d
-    }
-}
-
-/// Pull `![alt](url)` and `<img src="url">` out of a line. Returns the line
-/// with each replaced by `[alt]`, and the (alt, url) pairs.
-fn split_images(l: &str) -> (String, Vec<(String, String)>) {
-    let (mut out, mut found) = (String::new(), Vec::new());
-    let mut rest = l;
-    loop {
-        let md = rest.find("![");
-        let html = rest.find("<img");
-        let Some(i) = [md, html].into_iter().flatten().min() else { break };
-        let (alt, url, end) = if Some(i) == md {
-            let r = &rest[i + 2..];
-            let Some(c) = r.find("](") else { break };
-            let u = &r[c + 2..];
-            let Some(e) = u.find(')') else { break };
-            (r[..c].to_string(), u[..e].split_whitespace().next().unwrap_or("").to_string(), i + 2 + c + 2 + e + 1)
-        } else {
-            let r = &rest[i..];
-            let Some(e) = r.find('>') else { break };
-            let tag = &r[..e];
-            let attr = |n: &str| {
-                let p = tag.find(&format!("{}=", n))? + n.len() + 1;
-                let q = tag[p..].chars().next()?;
-                let v = &tag[p + 1..];
-                Some(v[..v.find(q)?].to_string())
-            };
-            (attr("alt").unwrap_or_default(), attr("src").unwrap_or_default(), i + e + 1)
-        };
-        out.push_str(&rest[..i]);
-        if url.starts_with("http") {
-            out.push_str(&format!("[{}]", if alt.is_empty() { "image" } else { &alt }));
-            found.push((alt, url));
-        } else {
-            out.push_str(&rest[i..end]);
-        }
-        rest = &rest[end..];
-    }
-    out.push_str(rest);
-    (out, found)
-}
-
-/// Light markdown styling: fences, headings, quotes, and inline images (when
-/// `images` is on). Everything else is text.
-fn markdown(s: &str, ind: usize, d: &mut Vec<DL>, images: bool) {
-    let mut fence = false;
-    for l in s.lines() {
-        let l = l.trim_end_matches('\r');
-        if l.trim_start().starts_with("```") {
-            fence = !fence;
-            d.push(dl(ind, l, Style::fg(FG_DIM)));
-        } else if fence {
-            d.push(dl(ind, l, Style::fg(C_CODE)));
-        } else if l.starts_with('#') {
-            d.push(dl(ind, l.trim_start_matches('#').trim_start(), Style::new(ACCENT, 0, BOLD)));
-        } else if l.starts_with('>') {
-            d.push(dl(ind, l, Style::new(FG_DIM, 0, ITALIC)));
-        } else if images && (l.contains("![") || l.contains("<img")) {
-            let (text, found) = split_images(l);
-            if !text.trim().is_empty() && !(found.len() == 1 && text.trim() == format!("[{}]", if found[0].0.is_empty() { "image" } else { &found[0].0 })) {
-                d.push(dl(ind, text, Style::default()));
-            }
-            for (alt, url) in found {
-                d.push(DL { ind, text: alt, st: Style::default(), img: Some(url) });
-            }
-        } else {
-            d.push(dl(ind, l, Style::default()));
-        }
     }
 }
 
@@ -1333,47 +1264,42 @@ impl App {
         }
     }
 
-    fn render_detail(&mut self, bottom: usize) {
-        let w = self.screen.w;
+    /// Draw markdown text in a scrollable pane (columns x0..x0+w, rows y0..y0+h).
+    fn draw_markdown(&mut self, src: &str, hard_breaks: bool, (x0, w): (usize, usize), (y0, h): (usize, usize), scroll: &mut usize) {
+        enum R {
+            S(Vec<mtui::markdown::Span>),
+            I { x: usize, url: String, alt: String, i: usize, of: usize, id: u32 },
+        }
         let images = self.gallery.enabled;
-        let Some(d) = &mut self.detail else { return };
-        let doc = d.doc(images);
-        let view_h = bottom.saturating_sub(1);
-        // text rows, or one line of an inline image (doc index, line, lines)
-        enum R<'a> {
-            T(usize, &'a str, Style),
-            I(usize, usize, usize, usize),
-        }
+        let cols = |x: usize| (x0 + w).saturating_sub(x + 2).min(60);
+        let opts = mtui::markdown::Opts { width: w.saturating_sub(3), images, hard_breaks };
         let mut rows: Vec<R> = Vec::new();
-        for (di, l) in doc.iter().enumerate() {
-            if let Some(url) = &l.img {
-                let of = self.gallery.size(url, w.saturating_sub(l.ind + 2).min(60), 14).map_or(1, |s| s.1);
-                rows.extend((0..of).map(|i| R::I(di, l.ind, i, of)));
-                continue;
-            }
-            for (a, b) in wrap(&l.text, w.saturating_sub(l.ind + 1).max(1)) {
-                rows.push(R::T(l.ind, &l.text[a..b], l.st));
-            }
-        }
-        d.scroll = d.scroll.min(rows.len().saturating_sub(view_h));
-        self.screen.fill(0, w, 0, Style::new(252, BG_BAR, 0));
-        let title = format!(" {} #{} ", d.item.repo, d.item.num);
-        self.screen.puts(0, 0, &title, Style::new(255, BG_BAR, BOLD), w);
-        if rows.len() > view_h {
-            let s = format!("{}% ", (d.scroll + view_h) * 100 / rows.len());
-            self.screen.puts(w.saturating_sub(s.len()), 0, &s, Style::new(FG_DIM, BG_BAR, 0), w);
-        }
-        let mut pics: HashMap<usize, (usize, usize, usize, usize, usize)> = HashMap::new();
-        for (k, r) in rows.iter().enumerate().skip(d.scroll).take(view_h) {
-            let y = 1 + k - d.scroll;
-            match r {
-                R::T(ind, t, st) => {
-                    self.screen.puts(1 + ind, y, t, *st, w);
+        let mut id = 0;
+        for ml in mtui::markdown::render(src, &opts) {
+            match ml.image {
+                Some((alt, url)) => {
+                    let x = x0 + 1 + ml.indent;
+                    let of = self.gallery.size(&url, cols(x), 14).map_or(1, |s| s.1);
+                    id += 1;
+                    rows.extend((0..of).map(|i| R::I { x, url: url.clone(), alt: alt.clone(), i, of, id }));
                 }
-                R::I(di, ind, i, of) => {
-                    let url = doc[*di].img.as_deref().unwrap_or("");
-                    if self.gallery.size(url, w.saturating_sub(ind + 2).min(60), 14).is_some() {
-                        let e = pics.entry(*di).or_insert((y, *ind, *i, *i, *of));
+                None => rows.push(R::S(ml.spans)),
+            }
+        }
+        *scroll = (*scroll).min(rows.len().saturating_sub(h));
+        let mut pics: HashMap<u32, (usize, usize, usize, usize, usize, String)> = HashMap::new();
+        for (k, r) in rows.iter().enumerate().skip(*scroll).take(h) {
+            let y = y0 + k - *scroll;
+            match r {
+                R::S(spans) => {
+                    let mut x = x0 + 1;
+                    for (t, st) in spans {
+                        x = self.screen.puts(x, y, t, *st, x0 + w);
+                    }
+                }
+                R::I { x, url, alt, i, of, id } => {
+                    if self.gallery.size(url, cols(*x), 14).is_some() {
+                        let e = pics.entry(*id).or_insert((y, *x, *i, *i, *of, url.clone()));
                         e.3 = i + 1;
                     } else {
                         if self.gallery.request(url) {
@@ -1384,18 +1310,102 @@ impl App {
                             Some(mimg::Slot::Loading) => " …".to_string(),
                             _ => String::new(),
                         };
-                        let alt = if doc[*di].text.is_empty() { "image" } else { &doc[*di].text };
-                        self.screen.puts(1 + ind, y, &format!("🖼 {}{}", alt, note), Style::new(C_LINK, 0, 0), w);
+                        self.screen.puts(*x, y, &format!("🖼 {}{}", if alt.is_empty() { "image" } else { alt }, note), Style::new(C_LINK, 0, 0), x0 + w);
                     }
                 }
             }
         }
         let mut ims = Vec::new();
         if !matches!(self.mode, Mode::Pick(_) | Mode::Files(_) | Mode::Help) {
-            for (di, (y, ind, i0, i1, of)) in pics {
-                let url = doc[di].img.as_deref().unwrap_or("");
-                if let Some((cols, _)) = self.gallery.size(url, w.saturating_sub(ind + 2).min(60), 14) {
-                    ims.extend(self.gallery.place(url, di as u32 + 1, (1 + ind, y), cols, of, i0, i1));
+            for (id, (y, x, i0, i1, of, url)) in pics {
+                if let Some((c, _)) = self.gallery.size(&url, cols(x), 14) {
+                    ims.extend(self.gallery.place(&url, id, (x, y), c, of, i0, i1));
+                }
+            }
+        }
+        self.screen.set_images(ims);
+    }
+
+    fn render_detail(&mut self, bottom: usize) {
+        let w = self.screen.w;
+        let images = self.gallery.enabled;
+        let Some(d) = &mut self.detail else { return };
+        let doc = d.doc();
+        let view_h = bottom.saturating_sub(1);
+        // text, markdown spans, or one line of an inline image
+        enum R {
+            T(usize, String, Style),
+            S(usize, Vec<mtui::markdown::Span>),
+            I { x: usize, url: String, alt: String, i: usize, of: usize, id: u32 },
+        }
+        let img_cols = |x: usize| w.saturating_sub(x + 2).min(60);
+        let mut rows: Vec<R> = Vec::new();
+        let mut next_id = 1;
+        for l in &doc {
+            if !l.md {
+                for (a, b) in wrap(&l.text, w.saturating_sub(l.ind + 1).max(1)) {
+                    rows.push(R::T(l.ind, l.text[a..b].to_string(), l.st));
+                }
+                continue;
+            }
+            let opts = mtui::markdown::Opts { width: w.saturating_sub(l.ind + 2), images, hard_breaks: true };
+            for ml in mtui::markdown::render(&l.text, &opts) {
+                match ml.image {
+                    Some((alt, url)) => {
+                        let x = 1 + l.ind + ml.indent;
+                        let of = self.gallery.size(&url, img_cols(x), 14).map_or(1, |s| s.1);
+                        next_id += 1;
+                        rows.extend((0..of).map(|i| R::I { x, url: url.clone(), alt: alt.clone(), i, of, id: next_id }));
+                    }
+                    None => rows.push(R::S(l.ind, ml.spans)),
+                }
+            }
+        }
+        d.scroll = d.scroll.min(rows.len().saturating_sub(view_h));
+        self.screen.fill(0, w, 0, Style::new(252, BG_BAR, 0));
+        let title = format!(" {} #{} ", d.item.repo, d.item.num);
+        self.screen.puts(0, 0, &title, Style::new(255, BG_BAR, BOLD), w);
+        if rows.len() > view_h {
+            let s = format!("{}% ", (d.scroll + view_h) * 100 / rows.len());
+            self.screen.puts(w.saturating_sub(s.len()), 0, &s, Style::new(FG_DIM, BG_BAR, 0), w);
+        }
+        let mut pics: HashMap<u32, (usize, usize, usize, usize, usize, &str)> = HashMap::new();
+        for (k, r) in rows.iter().enumerate().skip(d.scroll).take(view_h) {
+            let y = 1 + k - d.scroll;
+            match r {
+                R::T(ind, t, st) => {
+                    self.screen.puts(1 + ind, y, t, *st, w);
+                }
+                R::S(ind, spans) => {
+                    let mut x = 1 + ind;
+                    for (t, st) in spans {
+                        x = self.screen.puts(x, y, t, *st, w);
+                    }
+                }
+                R::I { x, url, alt, i, of, id } => {
+                    if self.gallery.size(url, img_cols(*x), 14).is_some() {
+                        let e = pics.entry(*id).or_insert((y, *x, *i, *i, *of, url));
+                        e.3 = i + 1;
+                    } else {
+                        if self.gallery.request(url) {
+                            self.net.fetch_image(url, url);
+                        }
+                        let note = match self.gallery.slot(url) {
+                            Some(mimg::Slot::Failed(e)) => format!(" ({})", e),
+                            Some(mimg::Slot::Loading) => " …".to_string(),
+                            _ => String::new(),
+                        };
+                        let alt = if alt.is_empty() { "image" } else { alt };
+                        self.screen.puts(*x, y, &format!("🖼 {}{}", alt, note), Style::new(C_LINK, 0, 0), w);
+                    }
+                }
+            }
+        }
+        let mut ims = Vec::new();
+        if !matches!(self.mode, Mode::Pick(_) | Mode::Files(_) | Mode::Help) {
+            for (id, (y, x, i0, i1, of, url)) in pics {
+                if let Some((cols, _)) = self.gallery.size(url, img_cols(x), 14) {
+                    ims.extend(self.gallery.place(url, id, (x, y), cols, of, i0, i1));
                 }
             }
         }
@@ -1416,13 +1426,6 @@ mod tests {
         assert_eq!(age_at("2026-10-06T11:25:42Z", t + 3 * 3600), "3h");
         assert_eq!(age_at("2026-10-06T11:25:42Z", t + 3 * 86400), "3d");
         assert_eq!(age_at("garbage", t), "");
-    }
-
-    #[test]
-    fn image_links() {
-        let (t, f) = split_images("see ![shot](https://x.io/a.png) and <img width=3 alt=\"b\" src=\"https://x.io/b.jpg\"> ok ![rel](a.png)");
-        assert_eq!(t, "see [shot] and [b] ok ![rel](a.png)");
-        assert_eq!(f, vec![("shot".to_string(), "https://x.io/a.png".to_string()), ("b".to_string(), "https://x.io/b.jpg".to_string())]);
     }
 
     #[test]

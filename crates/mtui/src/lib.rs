@@ -5,6 +5,7 @@ pub mod fuzzy;
 pub mod json;
 pub mod kitty;
 pub mod lineedit;
+pub mod markdown;
 pub mod picker;
 pub mod regex;
 pub mod screen;

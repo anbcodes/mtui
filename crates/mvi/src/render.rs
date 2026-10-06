@@ -63,6 +63,9 @@ impl Editor {
     }
 
     pub fn render(&mut self) {
+        if self.preview.is_some() {
+            return self.render_preview();
+        }
         self.scroll();
         let (w, h) = (self.screen.w, self.screen.h);
         if w < 10 || h < 3 {

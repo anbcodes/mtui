@@ -23,6 +23,7 @@ cargo test
 |---|---|
 | `term` | Raw mode, key decoding (CSI/SS3, UTF-8, Alt, bracketed paste, opt-in SGR mouse), resize flag, Ctrl-Z suspend, a panic hook that restores the terminal, and a `Waker` self-pipe so background threads can interrupt a blocking key read |
 | `kitty` | Kitty graphics protocol (also ghostty and WezTerm): transmit once, place with cropping so images scroll |
+| `markdown` | Markdown to styled, word-wrapped lines: headings, emphasis, links, images, quotes, nested lists with task boxes, highlighted code fences, tables, rules and some HTML. mgh renders descriptions, comments and READMEs with it; mvi's `:preview` uses it |
 | `syntax` | Table-driven syntax highlighting, shared by mvi and mgh's code view |
 | `screen` | A double-buffered cell grid. `flush` diffs it against the previous frame and sends only the changed cells in one `write`. Also handles OSC 52 clipboard |
 | `picker` | A generic fuzzy picker (`Picker<T: Label>`) with its keys and bottom-docked drawing. mvi uses it for files, buffers, symbols and grep results; mslack uses it for channels and links, and mgh for repos. It also handles wheel and click |

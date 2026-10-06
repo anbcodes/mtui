@@ -42,6 +42,9 @@ pub struct Browse {
     pub hide_side: bool,
     pub path: Option<String>,
     pub rev: Rev,
+    /// Show a markdown file's source instead of the rendered text.
+    pub raw: bool,
+    pub mscroll: usize,
 }
 
 fn is_image(name: &str) -> bool {
@@ -50,6 +53,19 @@ fn is_image(name: &str) -> bool {
 }
 
 impl Browse {
+    /// The open file's text, when it's markdown shown rendered.
+    pub fn rendered(&self) -> Option<String> {
+        let path = self.path.as_ref()?;
+        let n = path.to_ascii_lowercase();
+        if self.raw || !(n.ends_with(".md") || n.ends_with(".markdown")) {
+            return None;
+        }
+        match self.rev.contents.get(path)? {
+            Content::Text(lines) => Some(lines.join("\n")),
+            _ => None,
+        }
+    }
+
     pub fn loaded(&self) -> bool {
         !self.nodes.is_empty()
     }
@@ -182,6 +198,7 @@ impl App {
         let mut rev = Rev { single: true, full: true, ..Rev::default() };
         rev.files = Some(vec![FileDiff { name: path.clone(), status: "modified".into(), add: 0, del: 0, patch: None }]);
         rev.select_file(0);
+        b.mscroll = 0;
         let image = is_image(&path);
         if !image {
             let c = if size > BIG_FILE { Content::Failed("file too large; o opens it on GitHub".into()) } else { Content::Loading };
@@ -262,6 +279,23 @@ impl App {
             _ => {}
         }
         if self.code.focus_code && self.code.path.is_some() {
+            if self.code.rendered().is_some() {
+                let m = &mut self.code.mscroll;
+                match k {
+                    Key::Char('q') | Key::Esc => self.code.focus_code = false,
+                    Key::Char('j') | Key::Down | Key::Ctrl('n') | Key::Enter => *m += 1,
+                    Key::Char('k') | Key::Up | Key::Ctrl('p') => *m = m.saturating_sub(1),
+                    Key::Ctrl('d') | Key::PageDown | Key::Char(' ') | Key::Ctrl('f') => *m += page as usize,
+                    Key::Ctrl('u') | Key::PageUp | Key::Ctrl('b') => *m = m.saturating_sub(page as usize),
+                    Key::Char('G') | Key::End => *m = usize::MAX / 2,
+                    Key::Char('g') if g => *m = 0,
+                    Key::Char('g') => self.pending_g = true,
+                    Key::Home => *m = 0,
+                    Key::Char('m') => self.code.raw = true,
+                    _ => {}
+                }
+                return;
+            }
             let rev = &mut self.code.rev;
             match k {
                 Key::Char('q') | Key::Esc => self.code.focus_code = false,
@@ -275,6 +309,7 @@ impl App {
                 Key::Char('g') => self.pending_g = true,
                 Key::Char('h') | Key::Left => rev.hscroll = rev.hscroll.saturating_sub(8),
                 Key::Char('l') | Key::Right => rev.hscroll += 8,
+                Key::Char('m') => self.code.raw = false,
                 _ => {}
             }
             return;
@@ -331,6 +366,8 @@ impl App {
         match m.kind {
             MouseKind::WheelUp if on_side => b.side_st.top = b.side_st.top.saturating_sub(3),
             MouseKind::WheelDown if on_side => b.side_st.top += 3,
+            MouseKind::WheelUp if b.rendered().is_some() => b.mscroll = b.mscroll.saturating_sub(3),
+            MouseKind::WheelDown if b.rendered().is_some() => b.mscroll += 3,
             MouseKind::WheelUp => b.rev.scroll_view(-3),
             MouseKind::WheelDown => b.rev.scroll_view(3),
             MouseKind::Press(0) if on_side && m.y >= side.y0 => {
@@ -403,8 +440,14 @@ impl App {
             self.screen.puts(x0 + 2, 3, "select a file", Style::new(FG_DIM, 0, mtui::screen::ITALIC), w);
             return;
         };
-        let title = format!(" {}  [{}]", path, b.branch);
+        let title = format!(" {}  [{}]{}", path, b.branch, if b.rendered().is_some() { "  rendered, m for source" } else { "" });
         self.screen.puts(x0, 1, &title, Style::new(if b.focus_code { 255 } else { 250 }, BG_BAR, BOLD), w);
+        if let Some(src) = b.rendered() {
+            let mut sc = b.mscroll;
+            self.draw_markdown(&src, false, (x0, w - x0), (2, h), &mut sc);
+            self.code.mscroll = sc;
+            return;
+        }
         let (ims, needs) = draw_rows(&mut self.screen, &mut self.gallery, &mut b.rev, &[], &b.branch.clone(), (x0, w - x0), (2, h));
         let (repo, branch) = (b.repo.clone(), b.branch.clone());
         let overlay = matches!(self.mode, Mode::Pick(_) | Mode::Files(_) | Mode::Help);
