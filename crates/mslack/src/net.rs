@@ -2,7 +2,7 @@
 // keeps its own HTTP keep-alive connection. Results come back on a channel
 // and wake the UI loop.
 
-use crate::http::{self, Client};
+use mhttp::{self as http, Client};
 use mtui::json::{self, Value};
 use mtui::term::Waker;
 use std::sync::mpsc::{self, Receiver, Sender};

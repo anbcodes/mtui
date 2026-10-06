@@ -64,13 +64,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
+name = "mgh"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mhttp",
+ "mtui",
+]
+
+[[package]]
+name = "mhttp"
+version = "0.1.0"
+dependencies = [
+ "rustls",
+ "rustls-native-certs",
+]
+
+[[package]]
 name = "mslack"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "mhttp",
  "mtui",
- "rustls",
- "rustls-native-certs",
 ]
 
 [[package]]

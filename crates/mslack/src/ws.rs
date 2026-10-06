@@ -2,7 +2,7 @@
 // Socket Mode (app token; events come in envelopes that must be acked) and
 // RTM (user or browser-session token; bare events, client sends pings).
 
-use crate::http::{self, Client, Stream, Url};
+use mhttp::{self as http, Client, Stream, Url};
 use crate::net::{Reply, Tag};
 use mtui::json::{self, Value};
 use mtui::term::Waker;

@@ -1,8 +1,8 @@
 [package]
-name = "mslack"
+name = "mgh"
 version.workspace = true
 edition.workspace = true
-description = "A tiny Slack client for the terminal"
+description = "A tiny GitHub client for the terminal"
 
 [dependencies]
 libc.workspace = true

@@ -1,6 +1,5 @@
 mod app;
 mod format;
-mod http;
 mod net;
 mod ws;
 
@@ -33,7 +32,7 @@ fn normalize_cookie(c: &str) -> String {
     if c.contains('%') {
         c.to_string()
     } else {
-        http::urlencode(c)
+        mhttp::urlencode(c)
     }
 }
 

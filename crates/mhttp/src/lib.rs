@@ -1,4 +1,4 @@
-// A small HTTP/1.1 client over rustls (or plain TCP for http:// test
+// Shared by mslack and mgh. A small HTTP/1.1 client over rustls (or plain TCP for http:// test
 // servers). Keeps one connection alive per client and reuses it.
 
 use rustls::pki_types::ServerName;
@@ -166,7 +166,7 @@ impl Client {
             self.conn = Some((u.key(), BufReader::new(connect(u, TIMEOUT)?)));
         }
         let r = &mut self.conn.as_mut().unwrap().1;
-        let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: mslack/{}\r\nContent-Length: {}\r\n", method, u.path, u.host, env!("CARGO_PKG_VERSION"), body.len());
+        let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: mhttp/{}\r\nContent-Length: {}\r\n", method, u.path, u.host, env!("CARGO_PKG_VERSION"), body.len());
         for (k, v) in headers {
             req += &format!("{}: {}\r\n", k, v);
         }

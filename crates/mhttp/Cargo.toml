@@ -1,0 +1,9 @@
+[package]
+name = "mhttp"
+version.workspace = true
+edition.workspace = true
+description = "A tiny HTTP/1.1 client over rustls for the m* tools"
+
+[dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
