@@ -12,11 +12,13 @@ The token needs `repo` and `notifications` access (fine-grained: pull requests, 
 
 ## Tabs
 
+`6` is a code browser for the repo on tab 5: the whole file tree (one request, folders expand instantly) beside a highlighted file view. `/` or `C-p` finds a file by fuzzy name, `Tab` switches between tree and file, `o` opens the file on GitHub and `y` copies a link to the cursor's line. It opens the repo's README first, and shows the default branch.
+
 `1` PRs waiting for your review, `2` your open PRs, `3` issues assigned to you, `4` the notification inbox, `5` a repo's open PRs and issues (`C-k` picks another; type `owner/repo` to go to one that isn't listed).
 
 ## Reviewing code
 
-Open a pull request and press `d`. Changed files show as syntax-highlighted diffs with line numbers and the existing inline comment threads. `]`/`[` (or Tab) move between files, `f` picks one, `m` marks it viewed, `}`/`{` jump hunks, `n`/`N` jump comments, `e` shows the whole file at the PR head instead of just the hunks.
+Open a pull request and press `d`. A file tree of the changed files sits on the left (status letter, comment count, ✓ when viewed); `Tab` moves focus to it, `j`/`k` pick a file, `b` hides it. Each file shows as syntax-highlighted diffs with line numbers and the existing inline comment threads. `]`/`[` move between files, `f` picks one, `m` marks it viewed, `}`/`{` jump hunks, `n`/`N` jump comments, `e` shows the whole file at the PR head instead of just the hunks.
 
 Move to a line and press `c` to comment on it (`v` first selects several lines). Comments queue in a pending review, shown inline and counted in the status bar; `x` drops one. `S` submits them with a summary, or `a` / `X` approve or request changes with them. `r` replies to a thread right away. Pending comments survive leaving the item, but not quitting mgh.
 

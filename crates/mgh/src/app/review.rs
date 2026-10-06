@@ -1,11 +1,12 @@
 // Pull request review: the changed files as rows (diff or whole file) with
 // syntax highlighting, inline comment threads, and a pending review.
 
-use super::{name_color, App, FileItem, Mode, Purpose, ACCENT, BG_BAR, C_BAD, C_LINK, C_OK, FG_DIM};
+use super::{name_color, side, App, FileItem, Mode, Purpose, ACCENT, BG_BAR, C_BAD, C_LINK, C_OK, FG_DIM};
 use crate::api::{self, Req, Tag};
 use mtui::json::Value;
+use mtui::kitty::Placement;
 use mtui::picker::Picker;
-use mtui::screen::{Style, BOLD, ITALIC};
+use mtui::screen::{Screen, Style, BOLD, ITALIC};
 use mtui::syntax::{self, State};
 use mtui::term::{Key, Mouse, MouseKind};
 use mtui::wrap::wrap;
@@ -141,11 +142,20 @@ pub struct Rev {
     pub contents: HashMap<String, Content>,
     pub viewed: HashSet<String>,
     pub rows: Vec<VRow>,
-    rows_key: Option<(usize, bool, usize, u64)>,
+    pub rows_key: Option<(usize, bool, usize, u64)>,
     /// Bumped whenever something the rows depend on changes.
     pub ver: u64,
     /// The cursor's line (old, new) before a rebuild, to find it again.
     pub pos: (u32, u32),
+    /// Keep the cursor in view (with a margin) on the next draw; wheel
+    /// scrolling clears it so the view doesn't snap back to the cursor.
+    pub follow: bool,
+    pub hide_side: bool,
+    pub side_focus: bool,
+    pub side_st: side::SideState,
+    /// One line-number column (browsing a file) instead of old and new.
+    pub single: bool,
+    pub view_h: usize,
 }
 
 impl Rev {
@@ -155,7 +165,8 @@ impl Rev {
 
     pub fn select_file(&mut self, i: usize) {
         self.cur = i;
-        self.cursor = 0;
+        self.cursor = usize::MAX;
+        self.follow = true;
         self.top = 0;
         self.anchor = None;
         self.hscroll = 0;
@@ -174,8 +185,10 @@ impl Rev {
         let full = if self.full { self.contents.get(&f.name) } else { None };
         let rows = build(f, full, &self.comments, pending, w, img, sha);
         let (old, new) = self.pos;
-        self.cursor = if (old, new) == (0, 0) {
+        self.cursor = if self.cursor == usize::MAX {
             rows.iter().position(|r| r.kind.selectable()).unwrap_or(0)
+        } else if (old, new) == (0, 0) {
+            self.cursor.min(rows.len().saturating_sub(1))
         } else {
             rows.iter().position(|r| r.kind.is_code() && (r.old, r.new) == (old, new)).or_else(|| rows.iter().position(|r| r.kind.is_code() && (r.new == new || r.old == old))).unwrap_or(self.cursor.min(rows.len().saturating_sub(1)))
         };
@@ -198,6 +211,7 @@ impl Rev {
             i = j;
             if self.rows[i as usize].kind.selectable() {
                 self.cursor = i as usize;
+                self.follow = true;
                 if d.abs() > 1 {
                     return self.step(d - d.signum());
                 }
@@ -207,7 +221,38 @@ impl Rev {
         self.remember();
     }
 
+    /// Scroll the view itself (mouse wheel) and pull the cursor inside it.
+    pub fn scroll_view(&mut self, d: isize) {
+        let n = self.rows.len();
+        let vh = self.view_h.max(1);
+        self.top = (self.top as isize + d).clamp(0, n.saturating_sub(vh) as isize) as usize;
+        self.follow = false;
+        let hi = (self.top + vh).min(n).saturating_sub(1);
+        if self.cursor < self.top {
+            self.nearest(self.top, 1);
+        } else if self.cursor > hi {
+            self.nearest(hi, -1);
+        }
+        self.remember();
+    }
+
+    /// Put the cursor on the selectable row nearest `i`, looking first in `dir`.
+    fn nearest(&mut self, i: usize, dir: isize) {
+        let n = self.rows.len() as isize;
+        for dd in [dir, -dir] {
+            let mut j = i as isize;
+            while j >= 0 && j < n {
+                if self.rows[j as usize].kind.selectable() {
+                    self.cursor = j as usize;
+                    return;
+                }
+                j += dd;
+            }
+        }
+    }
+
     pub fn goto(&mut self, i: usize) {
+        self.follow = true;
         self.cursor = i.min(self.rows.len().saturating_sub(1));
         if !self.rows.get(self.cursor).is_some_and(|r| r.kind.selectable()) {
             self.step(1);
@@ -384,16 +429,163 @@ fn digits(n: u32) -> usize {
     n.max(1).to_string().len()
 }
 
+/// Largest an inline image gets, in cells.
+const IMG_ROWS: usize = 14;
+
+/// Draw `rev`'s rows into columns x0..x0+w and screen rows y0..y0+h: line
+/// numbers, highlighted code, comment threads, images. Keeps the cursor in
+/// view when it moved. Returns the image placements to show and the images
+/// that still need fetching, as (key, repo path).
+pub fn draw_rows(scr: &mut Screen, gallery: &mut mimg::Gallery, rev: &mut Rev, drafts: &[Pending], sha: &str, (x0, w): (usize, usize), (y0, h): (usize, usize)) -> (Vec<Placement>, Vec<(String, String)>) {
+    let img_cols = w.saturating_sub(16).clamp(10, 60);
+    {
+        let g = &*gallery;
+        rev.ensure(w.saturating_sub(10), drafts, &|k| g.size(k, img_cols, IMG_ROWS).map(|s| s.1), sha);
+    }
+    let n = rev.rows.len();
+    rev.view_h = h;
+    if rev.follow {
+        let margin = 3.min(h / 4);
+        if rev.cursor < rev.top + margin {
+            rev.top = rev.cursor.saturating_sub(margin);
+        }
+        if rev.cursor + margin >= rev.top + h {
+            rev.top = (rev.cursor + margin + 1).saturating_sub(h);
+        }
+        rev.follow = false;
+    }
+    if rev.cursor < rev.top {
+        rev.top = rev.cursor;
+    }
+    if rev.cursor >= rev.top + h {
+        rev.top = rev.cursor + 1 - h;
+    }
+    rev.top = rev.top.min(n.saturating_sub(h));
+
+    let xr = x0 + w;
+    let gw = digits(rev.rows.iter().map(|r| r.old.max(r.new)).max().unwrap_or(0)).max(3);
+    let (mc, tc) = if rev.single { (gw + 1, gw + 3) } else { (2 * gw + 2, 2 * gw + 4) };
+    let cx = x0 + tc - 1;
+    let (lo, hi) = match rev.anchor {
+        Some(a) => (a.min(rev.cursor), a.max(rev.cursor)),
+        None => (usize::MAX, 0),
+    };
+    let mut pics: HashMap<String, (usize, usize, usize, usize)> = HashMap::new();
+    let mut needs = Vec::new();
+    for (k, r) in rev.rows.iter().enumerate().skip(rev.top).take(h) {
+        let y = y0 + k - rev.top;
+        let cur = k == rev.cursor;
+        let ranged = (lo..=hi).contains(&k);
+        match r.kind {
+            RK::Hunk => {
+                let bg = if cur { BG_CUR } else if ranged { BG_RANGE } else { 0 };
+                scr.fill(x0, xr, y, Style::new(0, bg, 0));
+                scr.puts(x0, y, &r.text, Style::new(73, bg, 0), xr);
+            }
+            RK::Note => {
+                let bg = if cur { BG_CUR } else { 0 };
+                scr.fill(x0, xr, y, Style::new(0, bg, 0));
+                scr.puts(x0 + 1, y, &r.text, Style::new(FG_DIM, bg, ITALIC), xr);
+            }
+            RK::Add | RK::Del | RK::Ctx => {
+                let bg = match (r.kind, cur, ranged) {
+                    (_, false, true) => BG_RANGE,
+                    (RK::Add, true, _) => BG_ADD_CUR,
+                    (RK::Add, ..) => BG_ADD,
+                    (RK::Del, true, _) => BG_DEL_CUR,
+                    (RK::Del, ..) => BG_DEL,
+                    (_, true, _) => BG_CUR,
+                    _ => 0,
+                };
+                scr.fill(x0, xr, y, Style::new(0, bg, 0));
+                let num = |n: u32| if n > 0 { format!("{:>w$}", n, w = gw) } else { " ".repeat(gw) };
+                let nums = if rev.single { num(r.new) } else { format!("{} {}", num(r.old), num(r.new)) };
+                scr.puts(x0, y, &nums, Style::new(if cur { 252 } else { FG_DIM }, bg, 0), xr);
+                let (mark, col) = match r.kind {
+                    RK::Add => ('+', C_OK),
+                    RK::Del => ('-', C_BAD),
+                    _ => (' ', 0),
+                };
+                scr.put(x0 + mc, y, mark, Style::new(col, bg, BOLD));
+                let (mut x, mut c) = (x0 + tc, 0usize);
+                for (bi, ch) in r.text.char_indices() {
+                    let cw = mtui::screen::char_width(ch);
+                    if c >= rev.hscroll {
+                        if x + cw > xr {
+                            break;
+                        }
+                        let st = syntax::style(*r.hl.get(bi).unwrap_or(&0));
+                        x += scr.put(x, y, ch, Style::new(st.fg, bg, st.attr));
+                    }
+                    c += cw;
+                }
+            }
+            RK::CmtHead { pending } | RK::CmtBody { pending } => {
+                scr.fill(cx, xr, y, Style::new(0, BG_CMT, 0));
+                scr.put(cx, y, '┃', Style::new(if pending { ACCENT } else { 238 }, BG_CMT, 0));
+                if matches!(r.kind, RK::CmtHead { .. }) {
+                    let who = r.text.split(' ').next().unwrap_or("");
+                    scr.puts(cx + 2, y, &r.text, Style::new(if pending { ACCENT } else { name_color(who) }, BG_CMT, BOLD), xr);
+                } else {
+                    scr.puts(cx + 2, y, &r.text, Style::new(250, BG_CMT, 0), xr);
+                }
+            }
+            RK::Img { i, of } => {
+                if gallery.size(&r.key, img_cols, IMG_ROWS).is_some() {
+                    let e = pics.entry(r.key.clone()).or_insert((y, i, i, of));
+                    e.2 = i + 1;
+                } else {
+                    if gallery.request(&r.key) {
+                        needs.push((r.key.clone(), r.text.clone()));
+                    }
+                    let note = match gallery.slot(&r.key) {
+                        Some(mimg::Slot::Failed(e)) => format!(" ({})", e),
+                        Some(mimg::Slot::Loading) => " …".to_string(),
+                        _ => " (this terminal can't show images)".to_string(),
+                    };
+                    scr.puts(cx, y, &format!("🖼 {}{}", r.text, note), Style::new(C_LINK, 0, 0), xr);
+                }
+            }
+        }
+    }
+    if n > h {
+        let s = format!("{}% ", (rev.top + h).min(n) * 100 / n);
+        scr.puts(xr.saturating_sub(s.len()), y0.saturating_sub(1), &s, Style::new(FG_DIM, BG_BAR, 0), xr);
+    }
+    let ims = pics.into_iter().filter_map(|(key, (y, i0, i1, of))| gallery.size(&key, img_cols, IMG_ROWS).and_then(|(cols, _)| gallery.place(&key, 1, (cx, y), cols, of, i0, i1))).collect();
+    (ims, needs)
+}
+
 impl App {
+    /// Fetch the file at `sha` for each image the code view is waiting on.
+    pub(super) fn fetch_blobs(&mut self, repo: &str, sha: &str, needs: Vec<(String, String)>) {
+        for (key, path) in needs {
+            let enc = path.split('/').map(mhttp::urlencode).collect::<Vec<_>>().join("/");
+            let req = Req { accept: api::RAW, ..Req::get(format!("/repos/{}/contents/{}?ref={}", repo, enc, mhttp::urlencode(sha))) };
+            self.call(Tag::Blob(key), req);
+        }
+    }
+
     pub(super) fn review_mouse(&mut self, m: Mouse) {
+        let side = self.side;
         let Some(d) = &mut self.detail else { return };
+        let on_side = side.w > 0 && m.x <= side.w;
         match m.kind {
-            MouseKind::WheelUp => d.rev.step(-3),
-            MouseKind::WheelDown => d.rev.step(3),
-            MouseKind::Press(0) if m.y >= 1 => {
+            MouseKind::WheelUp if on_side => d.rev.side_st.top = d.rev.side_st.top.saturating_sub(3),
+            MouseKind::WheelDown if on_side => d.rev.side_st.top += 3,
+            MouseKind::WheelUp => d.rev.scroll_view(-3),
+            MouseKind::WheelDown => d.rev.scroll_view(3),
+            MouseKind::Press(0) if on_side && m.y >= side.y0 => {
+                if let Some(Some(f)) = self.side_map.get(side.top + m.y - side.y0) {
+                    d.rev.select_file(*f);
+                    d.rev.side_focus = false;
+                }
+            }
+            MouseKind::Press(0) if !on_side && m.y >= 1 => {
                 let i = d.rev.top + m.y - 1;
                 if d.rev.rows.get(i).is_some_and(|r| r.kind.selectable()) {
                     d.rev.cursor = i;
+                    d.rev.side_focus = false;
                     d.rev.remember();
                 }
             }
@@ -403,6 +595,7 @@ impl App {
 
     pub(super) fn review_key(&mut self, k: Key, g: bool) {
         let page = (self.screen.h.saturating_sub(3) / 2).max(1) as isize;
+        let side_vis = self.side.w > 0;
         let Some(d) = &mut self.detail else { return };
         let rev = &mut d.rev;
         let nfiles = rev.files.as_ref().map_or(0, |f| f.len());
@@ -411,6 +604,19 @@ impl App {
                 rev.select_file(i.rem_euclid(nfiles as isize) as usize);
             }
         };
+        if rev.side_focus && side_vis {
+            let to = |rev: &mut Rev, i: isize| rev.select_file(i.clamp(0, nfiles as isize - 1) as usize);
+            match k {
+                Key::Char('j') | Key::Down | Key::Ctrl('n') => return to(rev, rev.cur as isize + 1),
+                Key::Char('k') | Key::Up | Key::Ctrl('p') => return to(rev, rev.cur as isize - 1),
+                Key::Char('G') | Key::End => return to(rev, isize::MAX / 2),
+                Key::Char('g') if g => return to(rev, 0),
+                Key::Char('g') => return self.pending_g = true,
+                Key::Home => return to(rev, 0),
+                Key::Enter | Key::Char('l') | Key::Right | Key::Tab | Key::Esc => return rev.side_focus = false,
+                _ => {}
+            }
+        }
         match k {
             Key::Esc if rev.anchor.is_some() => rev.anchor = None,
             Key::Char('q') | Key::Esc => d.review = false,
@@ -425,6 +631,11 @@ impl App {
             Key::Char('g') => self.pending_g = true,
             Key::Char('h') | Key::Left => rev.hscroll = rev.hscroll.saturating_sub(8),
             Key::Char('l') | Key::Right => rev.hscroll += 8,
+            Key::Tab if side_vis => rev.side_focus = true,
+            Key::Char('b') => {
+                rev.hide_side = !rev.hide_side;
+                rev.side_focus = false;
+            }
             Key::Char(']') | Key::Tab => go_file(rev, rev.cur as isize + 1),
             Key::Char('[') | Key::BackTab => go_file(rev, rev.cur as isize - 1),
             Key::Char('}') => {
@@ -463,7 +674,7 @@ impl App {
                     .enumerate()
                     .map(|(i, f)| {
                         let n = rev.comment_count(&f.name);
-                        FileItem(format!("{} {}{}  +{} −{}{}", f.mark(), f.name, if n > 0 { format!("  💬{}", n) } else { String::new() }, f.add, f.del, if rev.viewed.contains(&f.name) { "  ✓" } else { "" }), i)
+                        FileItem(format!("{} {}{}  +{} −{}{}", f.mark(), f.name, if n > 0 { format!("  ✎{}", n) } else { String::new() }, f.add, f.del, if rev.viewed.contains(&f.name) { "  ✓" } else { "" }), i)
                     })
                     .collect();
                 self.mode = Mode::Files(Picker::new("files", items));
@@ -529,7 +740,6 @@ impl App {
 
     pub(super) fn render_review(&mut self, bottom: usize) {
         let w = self.screen.w;
-        let view_h = bottom.saturating_sub(1);
         self.screen.fill(0, w, 0, Style::new(252, BG_BAR, 0));
         let Some(d) = &mut self.detail else { return };
         let drafts: &[Pending] = self.drafts.get(&(d.item.repo.clone(), d.item.num)).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -537,134 +747,50 @@ impl App {
         let title = format!(" {} #{} ", d.item.repo, d.item.num);
         self.screen.puts(0, 0, &title, Style::new(255, BG_BAR, BOLD), w);
         let rev = &mut d.rev;
-        self.screen.set_images(Vec::new());
+        self.side = Default::default();
         let nfiles = rev.files.as_ref().map_or(0, |f| f.len());
         if nfiles == 0 {
+            self.screen.set_images(Vec::new());
             let s = if rev.files.is_none() { "loading files…" } else { "no changed files" };
             self.screen.puts(2, 2, s, Style::new(FG_DIM, 0, ITALIC), w);
             return;
         }
-        let gallery = &self.gallery;
-        let img_cols = w.saturating_sub(16).clamp(10, 60);
-        rev.ensure(w.saturating_sub(14), drafts, &|k| gallery.size(k, img_cols, 14).map(|s| s.1), &sha);
+        let h = bottom.saturating_sub(1);
+        let side_w = if !rev.hide_side && w >= 80 { (w / 4).clamp(22, 34) } else { 0 };
+        let x0 = if side_w > 0 { side_w + 1 } else { 0 };
 
-        // header: file, position, stats
+        if side_w > 0 {
+            let files = rev.files.as_ref().unwrap();
+            let entries: Vec<(String, char, u8, String, bool)> = files
+                .iter()
+                .map(|f| {
+                    let n = rev.comment_count(&f.name);
+                    let viewed = rev.viewed.contains(&f.name);
+                    let color = match f.mark() {
+                        'A' => C_OK,
+                        'D' => C_BAD,
+                        'R' => C_LINK,
+                        _ => 179,
+                    };
+                    (f.name.clone(), f.mark(), color, format!("{}{}", if n > 0 { format!("✎{} ", n) } else { String::new() }, if viewed { "✓" } else { "" }), viewed)
+                })
+                .collect();
+            let rows = side::changed_rows(&entries);
+            let sel = rows.iter().position(|r| r.target == Some(rev.cur));
+            self.side_map = rows.iter().map(|r| r.target).collect();
+            self.side = side::draw(&mut self.screen, &rows, sel, &mut rev.side_st, (0, side_w), (1, h), rev.side_focus);
+        }
+
         if let Some(f) = rev.file() {
             let viewed = rev.viewed.contains(&f.name);
             let t = format!("{} ({}/{}) +{} −{}{}{}", f.name, rev.cur + 1, nfiles, f.add, f.del, if rev.full { "  whole file" } else { "" }, if viewed { "  ✓ viewed" } else { "" });
             self.screen.puts(str_w(&title), 0, &t, Style::new(252, BG_BAR, 0), w);
         }
-
-        let n = rev.rows.len();
-        let margin = 3.min(view_h / 4);
-        if rev.cursor < rev.top + margin {
-            rev.top = rev.cursor.saturating_sub(margin);
-        }
-        if rev.cursor + margin >= rev.top + view_h {
-            rev.top = (rev.cursor + margin + 1).saturating_sub(view_h);
-        }
-        rev.top = rev.top.min(n.saturating_sub(view_h));
-        let gw = digits(rev.rows.iter().map(|r| r.old.max(r.new)).max().unwrap_or(0)).max(3);
-        let cx = 2 * gw + 3; // where the +/- marker sits
-        let (lo, hi) = match rev.anchor {
-            Some(a) => (a.min(rev.cursor), a.max(rev.cursor)),
-            None => (usize::MAX, 0),
-        };
-        let mut pics: HashMap<String, (usize, usize, usize, usize)> = HashMap::new();
-        for (k, r) in rev.rows.iter().enumerate().skip(rev.top).take(view_h) {
-            let y = 1 + k - rev.top;
-            let cur = k == rev.cursor;
-            let ranged = (lo..=hi).contains(&k);
-            match r.kind {
-                RK::Hunk => {
-                    let bg = if cur { BG_CUR } else if ranged { BG_RANGE } else { 0 };
-                    self.screen.fill(0, w, y, Style::new(0, bg, 0));
-                    self.screen.puts(0, y, &r.text, Style::new(73, bg, 0), w);
-                }
-                RK::Note => {
-                    let bg = if cur { BG_CUR } else { 0 };
-                    self.screen.fill(0, w, y, Style::new(0, bg, 0));
-                    self.screen.puts(1, y, &r.text, Style::new(FG_DIM, bg, ITALIC), w);
-                }
-                RK::Add | RK::Del | RK::Ctx => {
-                    let bg = match (r.kind, cur, ranged) {
-                        (_, _, true) if !cur => BG_RANGE,
-                        (RK::Add, true, _) => BG_ADD_CUR,
-                        (RK::Add, ..) => BG_ADD,
-                        (RK::Del, true, _) => BG_DEL_CUR,
-                        (RK::Del, ..) => BG_DEL,
-                        (_, true, _) => BG_CUR,
-                        _ => 0,
-                    };
-                    self.screen.fill(0, w, y, Style::new(0, bg, 0));
-                    let num = |n: u32| if n > 0 { format!("{:>w$}", n, w = gw) } else { " ".repeat(gw) };
-                    self.screen.puts(0, y, &format!("{} {}", num(r.old), num(r.new)), Style::new(if cur { 252 } else { FG_DIM }, bg, 0), w);
-                    let (mark, mc) = match r.kind {
-                        RK::Add => ('+', C_OK),
-                        RK::Del => ('-', C_BAD),
-                        _ => (' ', 0),
-                    };
-                    self.screen.put(cx - 1, y, mark, Style::new(mc, bg, BOLD));
-                    let (mut x, mut col) = (cx + 1, 0usize);
-                    for (bi, ch) in r.text.char_indices() {
-                        let cw = mtui::screen::char_width(ch);
-                        if col >= rev.hscroll {
-                            if x + cw > w {
-                                break;
-                            }
-                            let st = syntax::style(*r.hl.get(bi).unwrap_or(&0));
-                            x += self.screen.put(x, y, ch, Style::new(st.fg, bg, st.attr));
-                        }
-                        col += cw;
-                    }
-                }
-                RK::CmtHead { pending } | RK::CmtBody { pending } => {
-                    let bar = if pending { ACCENT } else { 238 };
-                    self.screen.fill(cx, w, y, Style::new(0, BG_CMT, 0));
-                    self.screen.put(cx, y, '┃', Style::new(bar, BG_CMT, 0));
-                    if matches!(r.kind, RK::CmtHead { .. }) {
-                        let who = r.text.split(' ').next().unwrap_or("");
-                        let st = Style::new(if pending { ACCENT } else { name_color(who) }, BG_CMT, BOLD);
-                        self.screen.puts(cx + 2, y, &r.text, st, w);
-                    } else {
-                        self.screen.puts(cx + 2, y, &r.text, Style::new(250, BG_CMT, 0), w);
-                    }
-                }
-                RK::Img { i, of } => {
-                    if self.gallery.size(&r.key, img_cols, 14).is_some() {
-                        let e = pics.entry(r.key.clone()).or_insert((y, i, i, of));
-                        e.2 = i + 1;
-                    } else {
-                        if self.gallery.request(&r.key) {
-                            let (repo, path) = (d.item.repo.clone(), r.text.clone());
-                            let enc = path.split('/').map(mhttp::urlencode).collect::<Vec<_>>().join("/");
-                            let req = Req { accept: api::RAW, ..Req::get(format!("/repos/{}/contents/{}?ref={}", repo, enc, mhttp::urlencode(&sha))) };
-                            self.pending += 1;
-                            self.net.call(Tag::Blob(r.key.clone()), req);
-                        }
-                        let note = match self.gallery.slot(&r.key) {
-                            Some(mimg::Slot::Failed(e)) => format!(" ({})", e),
-                            Some(mimg::Slot::Loading) => " …".to_string(),
-                            _ => " (set MTUI_IMAGES=1 to force image support)".to_string(),
-                        };
-                        self.screen.puts(cx, y, &format!("🖼 {}{}", r.text, note), Style::new(C_LINK, 0, 0), w);
-                    }
-                }
-            }
-        }
-        let mut ims = Vec::new();
-        if !matches!(self.mode, Mode::Pick(_) | Mode::Files(_) | Mode::Help) {
-            for (key, (y, i0, i1, of)) in pics {
-                if let Some((cols, _)) = self.gallery.size(&key, img_cols, 14) {
-                    ims.extend(self.gallery.place(&key, 1, (cx, y), cols, of, i0, i1));
-                }
-            }
-        }
-        self.screen.set_images(ims);
-        if n > view_h {
-            let s = format!("{}% ", (rev.top + view_h).min(n) * 100 / n);
-            self.screen.puts(w.saturating_sub(s.len()), 0, &s, Style::new(FG_DIM, BG_BAR, 0), w);
-        }
+        let (ims, needs) = draw_rows(&mut self.screen, &mut self.gallery, rev, drafts, &sha, (x0, w - x0), (1, h));
+        let repo = d.item.repo.clone();
+        let overlay = matches!(self.mode, Mode::Pick(_) | Mode::Files(_) | Mode::Help);
+        self.screen.set_images(if overlay { Vec::new() } else { ims });
+        self.fetch_blobs(&repo, &sha, needs);
     }
 }
 

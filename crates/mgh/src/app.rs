@@ -1,6 +1,8 @@
 // mgh state, keys and drawing.
 
 mod review;
+mod code;
+mod side;
 
 use crate::api::{self, Net, Reply, Req, Tag};
 use review::{Content, FileDiff, Pending, RComment, Rev};
@@ -29,7 +31,8 @@ const NAME_COLORS: [u8; 12] = [167, 173, 179, 143, 107, 72, 74, 110, 104, 140, 1
 /// Lists are re-fetched this often; unchanged ones answer 304.
 const REFRESH: Duration = Duration::from_secs(60);
 
-const TABS: [&str; 5] = ["review", "mine", "issues", "inbox", "repo"];
+const TABS: [&str; 6] = ["review", "mine", "issues", "inbox", "repo", "code"];
+const CODE_TAB: usize = 5;
 const REPO_TAB: usize = 4;
 const INBOX_TAB: usize = 3;
 
@@ -41,7 +44,12 @@ lists:
   r            refresh             o  open in browser
   y            copy URL (OSC 52)   m  mark notification read
   C-k          pick a repo         q  quit   C-z suspend
-tabs: 1 review requested, 2 my PRs, 3 my issues, 4 inbox, 5 repo
+code (tab 6):
+  j k Enter    move, open folder/file   h  collapse / parent
+  / C-p        find a file         Tab  tree <-> file   b  hide the tree
+  file: j k C-d C-u g G scroll the cursor, h l sideways, o browser, y copy link to the line
+  r reload the tree
+tabs: 1 review requested, 2 my PRs, 3 my issues, 4 inbox, 5 repo, 6 code
 item:
   j k C-d C-u  scroll              g G  top / bottom
   d            review the code     c  comment
@@ -52,7 +60,8 @@ item:
   q Esc h      back
 review (d):
   j k C-d C-u  move / page         g G  top / bottom   h l  scroll sideways
-  ] [ Tab      next / prev file    f  pick a file      m  mark viewed, next
+  ] [          next / prev file    f  pick a file      m  mark viewed, next
+  Tab          focus the file list b  hide / show it
   } {          next / prev hunk    n N  next / prev comment
   e            whole file          v  select lines     Esc  clear selection
   c            comment on the line(s), queued in a pending review
@@ -446,11 +455,14 @@ pub struct App {
     pub quit: bool,
     pub suspend: bool,
     gallery: mimg::Gallery,
+    side: side::SideGeo,
+    side_map: Vec<Option<usize>>,
     drafts: HashMap<(String, u64), Vec<Pending>>,
     me: String,
     repo: Option<String>,
     tab: usize,
-    lists: [List; 5],
+    lists: [List; 6],
+    code: code::Browse,
     filter: String,
     detail: Option<Detail>,
     gen: u64,
@@ -475,11 +487,14 @@ impl App {
             quit: false,
             suspend: false,
             gallery: mimg::Gallery::new(images),
+            side: Default::default(),
+            side_map: Vec::new(),
             drafts: HashMap::new(),
             me: String::new(),
             tab: if explicit { REPO_TAB } else { 0 },
             repo,
             lists: Default::default(),
+            code: Default::default(),
             filter: String::new(),
             detail: None,
             gen: 0,
@@ -524,7 +539,8 @@ impl App {
             1 => search("is:open is:pr author:@me archived:false"),
             2 => search("is:open is:issue assignee:@me archived:false"),
             INBOX_TAB => Req::get("/notifications?per_page=50"),
-            _ => search(&format!("repo:{} is:open archived:false", self.repo.as_ref()?)),
+            REPO_TAB => search(&format!("repo:{} is:open archived:false", self.repo.as_ref()?)),
+            _ => return None,
         })
     }
 
@@ -592,9 +608,22 @@ impl App {
         l.sel = (l.sel as isize + d).clamp(0, (n - 1).max(0)) as usize;
     }
 
+    /// Mouse wheel: scroll the view and pull the selection inside it, so the
+    /// next draw doesn't scroll back to the selection.
+    fn scroll_list(&mut self, d: isize) {
+        let n = self.vis().len();
+        let rows = self.geo.rows.max(1);
+        let l = &mut self.lists[self.tab];
+        l.top = (l.top as isize + d).clamp(0, n.saturating_sub(rows) as isize) as usize;
+        l.sel = l.sel.clamp(l.top, (l.top + rows).min(n).saturating_sub(1).max(l.top));
+    }
+
     fn set_tab(&mut self, t: usize) {
         self.tab = t % TABS.len();
         self.filter.clear();
+        if self.tab == CODE_TAB {
+            self.ensure_tree(false);
+        }
         if self.tab == REPO_TAB && self.repo.is_none() {
             self.info("no repo; pick one with C-k");
         }
@@ -603,6 +632,7 @@ impl App {
     fn set_repo(&mut self, r: String) {
         self.repo = Some(r);
         self.lists[REPO_TAB] = List::default();
+        self.code = Default::default();
         self.set_tab(REPO_TAB);
         self.refresh_list(REPO_TAB, true);
     }
@@ -844,8 +874,12 @@ impl App {
                     self.error(format!("repos: {}", e));
                 }
             },
+            Tag::RepoInfo => self.on_repo_info(res),
+            Tag::Tree => self.on_tree(res),
+            Tag::Code(path) => self.on_code(path, res),
             Tag::Blob(key) => {
                 self.gallery.arrived(&key, res.map(|r| r.bytes), &self.screen);
+                self.code.rev.ver += 1;
                 if let Some(d) = &mut self.detail {
                     d.rev.ver += 1;
                 }
@@ -948,11 +982,11 @@ impl App {
             Mode::Files(mut p) => match p.key(&k) {
                 Pick::Continue => self.mode = Mode::Files(p),
                 Pick::Cancel => {}
-                Pick::Accept => {
-                    if let (Some(it), Some(d)) = (p.selected(), &mut self.detail) {
-                        d.rev.select_file(it.1);
-                    }
-                }
+                Pick::Accept => match (p.selected(), &mut self.detail) {
+                    (Some(it), Some(d)) => d.rev.select_file(it.1),
+                    (Some(it), None) => self.open_node(it.1, true),
+                    _ => {}
+                },
             },
             Mode::Help => {}
         }
@@ -962,6 +996,9 @@ impl App {
         let g = std::mem::take(&mut self.pending_g);
         if self.detail.is_some() {
             return self.detail_key(k, g);
+        }
+        if self.tab == CODE_TAB {
+            return self.code_key(k, g);
         }
         let page = (self.geo.rows / 2).max(1) as isize;
         match k {
@@ -975,7 +1012,7 @@ impl App {
             Key::Home => self.move_sel(isize::MIN / 2),
             Key::Char('g') if g => self.move_sel(isize::MIN / 2),
             Key::Char('g') => self.pending_g = true,
-            Key::Char(c @ '1'..='5') => self.set_tab(c as usize - '1' as usize),
+            Key::Char(c @ '1'..='6') => self.set_tab(c as usize - '1' as usize),
             Key::Tab | Key::Char('L') => self.set_tab(self.tab + 1),
             Key::BackTab | Key::Char('H') => self.set_tab(self.tab + TABS.len() - 1),
             Key::Char('/') => self.mode = Mode::Filter(LineEdit::new()),
@@ -1045,6 +1082,17 @@ impl App {
     }
 
     fn mouse(&mut self, m: Mouse) {
+        if self.detail.is_none() && self.tab == CODE_TAB {
+            if m.y == 0 {
+                if let MouseKind::Press(0) = m.kind {
+                    if let Some(&(_, _, t)) = self.geo.tabs.iter().find(|&&(a, b, _)| (a..b).contains(&m.x)) {
+                        self.set_tab(t);
+                    }
+                }
+                return;
+            }
+            return self.code_mouse(m);
+        }
         if self.detail.as_ref().is_some_and(|d| d.review) {
             return self.review_mouse(m);
         }
@@ -1057,8 +1105,8 @@ impl App {
             return;
         }
         match m.kind {
-            MouseKind::WheelUp => self.move_sel(-3),
-            MouseKind::WheelDown => self.move_sel(3),
+            MouseKind::WheelUp => self.scroll_list(-3),
+            MouseKind::WheelDown => self.scroll_list(3),
             MouseKind::Press(0) if m.y == 0 => {
                 if let Some(&(_, _, t)) = self.geo.tabs.iter().find(|&&(a, b, _)| (a..b).contains(&m.x)) {
                     self.set_tab(t);
@@ -1119,8 +1167,12 @@ impl App {
             Some(d) if d.review => self.render_review(bottom),
             Some(_) => self.render_detail(bottom),
             None => {
-                self.screen.set_images(Vec::new());
-                self.render_list(bottom);
+                if self.tab == CODE_TAB {
+                    self.render_code(bottom);
+                } else {
+                    self.screen.set_images(Vec::new());
+                    self.render_list(bottom);
+                }
             }
         }
 
@@ -1133,6 +1185,7 @@ impl App {
             _ => match &self.detail {
                 Some(d) if d.review => (" REVIEW ", 73),
                 Some(_) => (" ITEM ", 110),
+                None if self.tab == CODE_TAB => (" CODE ", 108),
                 None => (" LIST ", 110),
             },
         };
@@ -1192,15 +1245,14 @@ impl App {
         self.screen.flush(cursor);
     }
 
-    fn render_list(&mut self, bottom: usize) {
+    fn draw_tabs(&mut self) {
         let w = self.screen.w;
-        // tab bar
         self.screen.fill(0, w, 0, Style::new(252, BG_BAR, 0));
         self.geo.tabs.clear();
         let mut x = 0;
         for (i, name) in TABS.iter().enumerate() {
             let name = match (i, &self.repo) {
-                (REPO_TAB, Some(r)) => r.as_str(),
+                (REPO_TAB, Some(r)) => r.rsplit('/').next().unwrap_or(r),
                 _ => name,
             };
             let n = self.lists[i].items.iter().filter(|it| i != INBOX_TAB || it.unread).count();
@@ -1210,7 +1262,11 @@ impl App {
             self.geo.tabs.push((x, x1, i));
             x = x1 + 1;
         }
+    }
 
+    fn render_list(&mut self, bottom: usize) {
+        let w = self.screen.w;
+        self.draw_tabs();
         let vis = self.vis();
         let (y0, rows) = (1, bottom.saturating_sub(1));
         let l = &mut self.lists[self.tab];

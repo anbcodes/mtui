@@ -6,7 +6,7 @@ A small family of fast, low-bandwidth terminal programs written in Rust. They sh
 |---|---|---|
 | [`mvi`](crates/mvi) | A vim-like modal editor with syntax highlighting, diagnostics, completion, a fuzzy finder and grep | ~0.9 MB |
 | [`mslack`](crates/mslack) | A Slack client: live updates (Socket Mode or RTM), channels, DMs, threads, reactions, edits, unread tracking | ~2 MB |
-| [`mgh`](crates/mgh) | A GitHub client: review requests, your PRs and issues, the notification inbox and any repo; a code review view with syntax-highlighted diffs and inline comments; approve, request changes, close, merge | ~1.5 MB |
+| [`mgh`](crates/mgh) | A GitHub client: review requests, your PRs and issues, the notification inbox and any repo; a code review view with a file tree, syntax-highlighted diffs and inline comments, a repo code browser; approve, request changes, close, merge | ~1.5 MB |
 | [`mtui`](crates/mtui) | The shared terminal library (not a program) | |
 | [`mhttp`](crates/mhttp) | The shared HTTP/1.1 client (not a program) | |
 | [`mimg`](crates/mimg) | Image decoding and the image cache for the kitty graphics protocol (not a program) | |

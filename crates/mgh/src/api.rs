@@ -13,6 +13,10 @@ const WORKERS: usize = 4;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tag {
     User,
+    /// The repo's default branch, its file tree, and one file's text.
+    RepoInfo,
+    Tree,
+    Code(String),
     /// A tab's list.
     List(usize),
     Repos,
