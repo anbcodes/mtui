@@ -1,0 +1,11 @@
+[package]
+name = "mmail"
+version.workspace = true
+edition.workspace = true
+description = "A tiny Fastmail client for the terminal, synced live with the web client over JMAP"
+
+[dependencies]
+libc.workspace = true
+mtui.workspace = true
+mhttp.workspace = true
+mimg.workspace = true

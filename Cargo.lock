@@ -106,6 +106,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mmail"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mhttp",
+ "mimg",
+ "mtui",
+]
+
+[[package]]
 name = "mslack"
 version = "0.1.0"
 dependencies = [
