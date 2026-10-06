@@ -127,6 +127,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mmd"
+version = "0.1.0"
+dependencies = [
+ "mtui",
+]
+
+[[package]]
 name = "mslack"
 version = "0.1.0"
 dependencies = [
@@ -148,6 +155,7 @@ name = "mvi"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "mmd",
  "mtui",
 ]
 

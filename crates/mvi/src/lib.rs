@@ -7,6 +7,7 @@ pub mod complete;
 pub mod diag;
 pub mod editor;
 pub mod ex;
+pub mod live;
 pub mod picker;
 pub mod preview;
 pub mod render;
@@ -38,7 +39,7 @@ pub fn run(ed: &mut Editor, input: &mut term::Input) {
     term::set_mouse(ed.opts.mouse);
     loop {
         ed.render();
-        let timeout = if ed.check_running { 100 } else { -1 };
+        let timeout = if ed.check_running { 100 } else if ed.mmd_active() { 150 } else { -1 };
         if let Some(k) = input.next_key(timeout) {
             ed.handle_key(k);
             // drain whatever is already buffered before redrawing (paste, fast typing, ssh bursts)
@@ -56,6 +57,7 @@ pub fn run(ed: &mut Editor, input: &mut term::Input) {
             ed.screen.resize(w, h);
         }
         ed.poll_check();
+        ed.sync_mmd();
         if ed.suspend {
             ed.suspend = false;
             term::suspend();
@@ -106,6 +108,7 @@ impl Pane {
         self.ed.handle_key(k);
         self.ed.suspend = false;
         self.ed.poll_check();
+        self.ed.sync_mmd();
     }
 
     /// The editor has quit (`:q`, `:wq`, ...).

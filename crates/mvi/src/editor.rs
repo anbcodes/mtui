@@ -137,6 +137,8 @@ pub struct Editor {
     sym_cache: Option<HashMap<String, String>>,
     pub picker: Option<Picker>,
     pub preview: Option<crate::preview::Preview>,
+    /// The live browser preview (`:mmd`), when running.
+    pub live: Option<crate::live::Live>,
     pub check_id: u64,
     pub check_running: bool,
     pub check_cwd: PathBuf,
@@ -341,6 +343,7 @@ impl Editor {
             sym_cache: None,
             picker: None,
             preview: None,
+            live: None,
             check_id: 0,
             check_running: false,
             check_cwd: PathBuf::new(),

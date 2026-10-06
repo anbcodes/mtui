@@ -9,6 +9,7 @@ A small family of fast, low-bandwidth terminal programs written in Rust. They sh
 | [`mgh`](crates/mgh) | A GitHub client: review requests, your PRs and issues, the notification inbox and any repo; a code review view with a file tree, syntax-highlighted diffs and inline comments, a repo code browser; approve, request changes, close, merge | ~1.5 MB |
 | [`mmail`](crates/mmail) | A Fastmail client over JMAP, live-synced with the web client: folders, conversations, search, compose in your editor, drafts, attachments, archive / trash / move / label / star | ~2 MB |
 | [`mjira`](crates/mjira) | A Jira client (Cloud and Server): your issues, favourite filters and JQL search, a project board where `<` `>` move cards through the workflow, issue view with transitions, assign, comment, labels, work logs, attachments inline | ~2 MB |
+| [`mmd`](crates/mmd) | A markdown renderer: clean printable HTML, a live-reloading browser preview, and scroll sync with mvi (`:mmd`) | ~0.6 MB |
 | [`mtui`](crates/mtui) | The shared terminal library (not a program) | |
 | [`mhttp`](crates/mhttp) | The shared HTTP/1.1 client (not a program) | |
 | [`mimg`](crates/mimg) | Image decoding and the image cache for the kitty graphics protocol (not a program) | |
@@ -49,6 +50,7 @@ crates/mslack/      Slack client
 crates/mgh/         GitHub client
 crates/mmail/       Fastmail client
 crates/mjira/       Jira client
+crates/mmd/         markdown to HTML, live preview server
 crates/mhttp/       shared HTTP client
 crates/mimg/        shared image support
 ```

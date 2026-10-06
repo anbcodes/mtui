@@ -7,3 +7,4 @@ description = "A tiny, fast, batteries-included vim-like editor"
 [dependencies]
 libc.workspace = true
 mtui.workspace = true
+mmd.workspace = true

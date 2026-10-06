@@ -1,0 +1,8 @@
+[package]
+name = "mmd"
+version.workspace = true
+edition.workspace = true
+description = "A minimal markdown renderer: printable HTML, a live-reloading preview server, and scroll sync with an editor"
+
+[dependencies]
+mtui.workspace = true

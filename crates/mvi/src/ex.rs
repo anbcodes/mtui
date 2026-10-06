@@ -25,6 +25,8 @@ EX      :w :q :wq :x :q! :qa :wa :e file :e! :enew :bn :bp :bd :b N :ls :N (goto
         :[range]d :[range]y :[range]> :[range]< :[range]sort[!u] :[range]norm keys
         :check :diag :cn :cp :grep re :files :cd :pwd :reg :noh :help
         :preview (:md) render the buffer as markdown: j k C-d C-u g G, Enter goes to the source line
+        :mmd         live HTML preview in the browser: follows edits and the cursor;
+                     double-click a block there to jump to its line; :mmd stop
         :set nu rnu ts=N sw=N et noet list ac(autocheck) acp(autocomplete) hls mouse ft=lang
         :checker <lang> <cmd>   (use {file}; prefix 'Marker|' to run where Marker lives)
 MOUSE   click moves the cursor · drag selects (visual) · double-click word · triple-click line
@@ -162,7 +164,7 @@ impl Editor {
     fn cmd_complete(&mut self) {
         let Some(sp) = self.cmdline.rfind(' ') else {
             // complete command names
-            let cmds = ["write", "quit", "edit", "enew", "bnext", "bprev", "bdelete", "buffers", "set", "check", "checker", "diag", "grep", "files", "help", "nohlsearch", "preview", "registers", "sort", "normal", "global", "substitute", "read", "pwd", "cd", "wall", "qall", "xit"];
+            let cmds = ["write", "quit", "edit", "enew", "bnext", "bprev", "bdelete", "buffers", "set", "check", "checker", "diag", "grep", "files", "help", "nohlsearch", "preview", "mmd", "registers", "sort", "normal", "global", "substitute", "read", "pwd", "cd", "wall", "qall", "xit"];
             let m: Vec<&str> = cmds.iter().copied().filter(|c| c.starts_with(self.cmdline.as_str())).collect();
             if m.len() == 1 {
                 self.cmdline = m[0].to_string() + " ";
@@ -562,6 +564,7 @@ impl Editor {
                 self.msg_lines = if lines.is_empty() { vec!["(no registers)".into()] } else { lines };
             }
             "md" | "preview" => self.open_preview(),
+            "mmd" => self.mmd_command(args),
             "h" | "help" => match self.bufs.iter().position(|b| b.name == "[help]") {
                 Some(i) => self.switch_buf(i),
                 None => {

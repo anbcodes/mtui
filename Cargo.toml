@@ -12,6 +12,7 @@ mtui = { path = "crates/mtui" }
 mhttp = { path = "crates/mhttp" }
 mimg = { path = "crates/mimg" }
 mvi = { path = "crates/mvi" }
+mmd = { path = "crates/mmd" }
 
 [profile.release]
 opt-level = 3

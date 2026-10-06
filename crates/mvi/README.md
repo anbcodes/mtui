@@ -12,6 +12,10 @@ cargo build --release -p mvi
 ./target/release/mvi [+LINE] file...        # `mvi -` reads stdin
 ```
 
+## Markdown preview
+
+`:preview` renders the buffer in a pager inside the terminal. `:mmd` opens a live HTML preview in the browser (rendered by [mmd](../mmd)): it shows what you type, follows the cursor line, and double-clicking a block in the browser jumps to its source. `:mmd stop` ends it.
+
 ## As a library
 
 `mvi` is also a crate: `mvi::Editor` is the editor, `mvi::run(&mut ed, &mut input)` is the event loop (the caller owns raw mode and the `mtui::term::Input`), `mvi::edit_file(&mut input, path, line)` runs a full-screen session on a file, and `mvi::Pane` embeds the editor in a rectangle of the host's `mtui::screen::Screen`: the host passes it keys (`pane.key`), draws it (`pane.draw(&mut screen, (x, y), (w, h))`, which returns the cursor) and checks `pane.finished()`. mmail uses a pane to write messages.
