@@ -9,6 +9,7 @@ pub mod markdown;
 pub mod picker;
 pub mod regex;
 pub mod screen;
+pub mod sidebar;
 pub mod syntax;
 pub mod term;
 pub mod wrap;

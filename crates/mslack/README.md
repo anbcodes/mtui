@@ -7,6 +7,8 @@ cargo build --release -p mslack
 SLACK_TOKEN=xoxp-… SLACK_APP_TOKEN=xapp-… ./target/release/mslack [channel]
 ```
 
+Inline images are clickable: a click shows the image fullscreen, and any key or click closes it.
+
 ## Getting a token
 
 1. Go to <https://api.slack.com/apps>, choose **Create New App → From an app manifest**, and paste [`slack-app-manifest.yml`](slack-app-manifest.yml).

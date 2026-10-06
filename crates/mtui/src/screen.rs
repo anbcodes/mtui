@@ -87,6 +87,12 @@ impl Screen {
 
     /// Images to show over the cells in the next `flush`. Only changes are
     /// sent. Leave empty while an overlay is drawn: images sit above text.
+    /// The kitty image id drawn over cell (x, y) in the current frame, for
+    /// click-to-open.
+    pub fn image_at(&self, x: usize, y: usize) -> Option<u32> {
+        self.images.iter().find(|p| x >= p.x && x < p.x + p.cols && y >= p.y && y < p.y + p.rows).map(|p| p.id)
+    }
+
     pub fn set_images(&mut self, v: Vec<Placement>) {
         self.images = v;
     }

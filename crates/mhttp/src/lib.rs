@@ -241,6 +241,54 @@ impl Client {
     }
 }
 
+/// GET `url` and hand each line of the response body to `on_line` (for
+/// server-sent events). Stops when it returns false, the server closes the
+/// connection, or no data arrives for `timeout`. Handles chunked bodies.
+pub fn stream_lines(url: &str, headers: &[(&str, &str)], timeout: Duration, mut on_line: impl FnMut(&str) -> bool) -> Result<(), String> {
+    let u = Url::parse(url)?;
+    let mut r = BufReader::new(connect(&u, timeout)?);
+    let mut req = format!("GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: mhttp/{}\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\n", u.path, u.host, env!("CARGO_PKG_VERSION"));
+    for (k, v) in headers {
+        req += &format!("{}: {}\r\n", k, v);
+    }
+    req += "\r\n";
+    let s = r.get_mut();
+    s.write_all(req.as_bytes()).and_then(|_| s.flush()).map_err(|e| e.to_string())?;
+    let (status, hdrs) = read_head(&mut r).map_err(|e| e.to_string())?;
+    if status != 200 {
+        return Err(format!("HTTP {}", status));
+    }
+    let chunked = hdrs.iter().any(|(k, v)| k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked"));
+    let mut pending: Vec<u8> = Vec::new();
+    let mut line = String::new();
+    loop {
+        if chunked {
+            line.clear();
+            r.read_line(&mut line).map_err(|e| e.to_string())?;
+            let n = usize::from_str_radix(line.trim().split(';').next().unwrap_or(""), 16).map_err(|_| "bad chunk size".to_string())?;
+            if n == 0 {
+                return Ok(());
+            }
+            let at = pending.len();
+            pending.resize(at + n, 0);
+            r.read_exact(&mut pending[at..]).map_err(|e| e.to_string())?;
+            line.clear();
+            r.read_line(&mut line).map_err(|e| e.to_string())?;
+        } else {
+            let n = r.read_until(b'\n', &mut pending).map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Ok(());
+            }
+        }
+        while let Some(i) = pending.iter().position(|&b| b == b'\n') {
+            let l: Vec<u8> = pending.drain(..=i).collect();
+            if !on_line(String::from_utf8_lossy(&l).trim_end_matches(['\r', '\n'])) {
+                return Ok(());
+            }
+        }
+    }
+}
+
 pub fn urlencode(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for b in s.bytes() {

@@ -26,6 +26,8 @@ Images in descriptions, comments and added or changed `.png`/`.jpg` files are sh
 
 Press `?` for every key. Lists: `j k`, `Enter`, `/` filter, `r` refresh, `o` browser, `y` copy URL, `m` mark read. An item shows the description, labels, reviews, CI checks, mergeability and the comment timeline; `c` comments, `a` approves, `X` requests changes, `x` closes or reopens, `M` merges.
 
+Click an inline image to see it fullscreen (any key or click closes it).
+
 Descriptions, comments and `.md` files in the code browser are rendered as markdown (`m` in the browser shows the source instead).
 
 ## Config

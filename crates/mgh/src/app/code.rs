@@ -456,7 +456,7 @@ impl App {
                 .enumerate()
                 .map(|(vi, &i)| {
                     let n = &b.nodes[i];
-                    SRow { depth: n.depth, text: if n.dir { format!("{}/", n.name) } else { n.name.clone() }, dir: n.dir, open: b.expanded.contains(&n.path), mark: None, extra: String::new(), dim: false, target: Some(vi) }
+                    SRow { depth: n.depth, text: if n.dir { format!("{}/", n.name) } else { n.name.clone() }, dir: n.dir, open: b.expanded.contains(&n.path), target: Some(vi), ..SRow::default() }
                 })
                 .collect();
             let title = format!(" {}{}", b.repo, if b.truncated { " (partial)" } else { "" });

@@ -371,6 +371,8 @@ enum Mode {
     Pick(Picker<String>),
     Files(Picker<FileItem>),
     Help,
+    /// An image shown fullscreen, by gallery key.
+    Image(String),
 }
 
 #[derive(Default)]
@@ -868,7 +870,7 @@ impl App {
         if let Key::Mouse(m) = k {
             match &self.mode {
                 Mode::Normal => return self.mouse(m),
-                Mode::Help if matches!(m.kind, MouseKind::Press(_)) => {
+                Mode::Help | Mode::Image(_) if matches!(m.kind, MouseKind::Press(_)) => {
                     self.mode = Mode::Normal;
                     return;
                 }
@@ -920,7 +922,7 @@ impl App {
                     _ => {}
                 },
             },
-            Mode::Help => {}
+            Mode::Help | Mode::Image(_) => {}
         }
     }
 
@@ -1014,6 +1016,12 @@ impl App {
     }
 
     fn mouse(&mut self, m: Mouse) {
+        if m.kind == MouseKind::Press(0) {
+            if let Some(k) = self.screen.image_at(m.x, m.y).and_then(|id| self.gallery.key_of(id)) {
+                self.mode = Mode::Image(k.to_string());
+                return;
+            }
+        }
         if self.detail.is_none() && self.tab == CODE_TAB {
             if m.y == 0 {
                 if let MouseKind::Press(0) = m.kind {
@@ -1072,6 +1080,14 @@ impl App {
             return;
         }
         let y_status = h - 1;
+        if let Mode::Image(key) = &self.mode {
+            self.screen.set_images(self.gallery.place_full(key, 1, (w, h - 1)).into_iter().collect());
+            self.screen.fill(0, w, y_status, Style::new(250, BG_BAR, 0));
+            let x = self.screen.puts(0, y_status, " IMAGE ", Style::new(16, 110, BOLD), w) + 1;
+            self.screen.puts(x, y_status, "any key or click to close", Style::new(250, BG_BAR, 0), w);
+            self.screen.flush(None);
+            return;
+        }
         let mut cursor = None;
         let mut bottom = y_status; // first row not available to the body
 

@@ -121,9 +121,28 @@ pub fn fit(iw: u32, ih: u32, max_c: usize, max_r: usize, cell: (usize, usize)) -
     ((c.round() as usize).clamp(1, max_c.max(1)), (r.round() as usize).clamp(1, max_r.max(1)))
 }
 
+/// Like `fit`, but scales up to fill the area (fullscreen viewing).
+pub fn fit_fill(iw: u32, ih: u32, max_c: usize, max_r: usize, cell: (usize, usize)) -> (usize, usize) {
+    let (cw, ch) = (cell.0.max(1) as f64, cell.1.max(1) as f64);
+    let (iw, ih) = (iw.max(1) as f64, ih.max(1) as f64);
+    let mut c = max_c as f64;
+    let mut r = c * cw * ih / (iw * ch);
+    if r > max_r as f64 {
+        r = max_r as f64;
+        c = r * ch * iw / (ih * cw);
+    }
+    ((c.round() as usize).clamp(1, max_c.max(1)), (r.round() as usize).clamp(1, max_r.max(1)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fills() {
+        assert_eq!(fit_fill(80, 40, 100, 40, (8, 16)), (100, 25));
+        assert_eq!(fit_fill(40, 80, 100, 10, (8, 16)), (10, 10));
+    }
 
     #[test]
     fn sizes() {

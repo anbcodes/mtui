@@ -7,6 +7,7 @@ use mtui::json::Value;
 use mtui::lineedit::{Edit, LineEdit};
 use mtui::picker::{Label, Pick, Picker};
 use mtui::screen::{Screen, Style, BOLD, ITALIC, UNDERLINE};
+use mtui::sidebar;
 use mtui::term::{Key, Mouse, MouseKind};
 use mtui::wrap::{str_width, wrap};
 use std::collections::{HashMap, HashSet};
@@ -126,6 +127,8 @@ enum Mode {
     React(LineEdit),
     ConfirmDelete(String),
     Help,
+    /// An image shown fullscreen, by gallery key.
+    Image(String),
 }
 
 /// One rendered row of the message pane.
@@ -155,7 +158,7 @@ enum Hit {
 #[derive(Default)]
 struct Geo {
     side_w: usize,
-    side_start: usize,
+    side: sidebar::Geo,
     y_comp: usize,
     comp_rows: usize,
     comp_x: usize,
@@ -206,7 +209,7 @@ pub struct App {
     /// Free scrolling (mouse wheel): the message at the top row and how many
     /// of its rows are scrolled past. None = keep the selection in view.
     pin: Option<(usize, usize)>,
-    side_top: Option<usize>,
+    side_st: sidebar::State,
     geo: Geo,
     last_click: Option<(Instant, usize)>,
     /// Range selection (visual mode / mouse drag): the other end from `sel`.
@@ -303,7 +306,7 @@ impl App {
             live: false,
             last_chans: None,
             pin: None,
-            side_top: None,
+            side_st: Default::default(),
             geo: Geo::default(),
             last_click: None,
             anchor: None,
@@ -1060,7 +1063,6 @@ impl App {
     }
 
     fn switch_rel(&mut self, d: isize, unread_only: bool) {
-        self.side_top = None;
         let n = self.chans.len() as isize;
         if n == 0 {
             return;
@@ -1108,7 +1110,7 @@ impl App {
         if let Key::Mouse(m) = k {
             match &self.mode {
                 Mode::Normal | Mode::Insert => return self.mouse(m),
-                Mode::Help | Mode::ConfirmDelete(_) if matches!(m.kind, MouseKind::Press(_)) => {
+                Mode::Help | Mode::Image(_) | Mode::ConfirmDelete(_) if matches!(m.kind, MouseKind::Press(_)) => {
                     self.mode = Mode::Normal;
                     return;
                 }
@@ -1166,7 +1168,7 @@ impl App {
                     self.info("");
                 }
             }
-            Mode::Help => {}
+            Mode::Help | Mode::Image(_) => {}
         }
     }
 
@@ -1352,6 +1354,12 @@ impl App {
     // ---------- mouse ----------
 
     fn mouse(&mut self, m: Mouse) {
+        if m.kind == MouseKind::Press(0) {
+            if let Some(k) = self.screen.image_at(m.x, m.y).and_then(|id| self.gallery.key_of(id)) {
+                self.mode = Mode::Image(k.to_string());
+                return;
+            }
+        }
         let g = &self.geo;
         let in_side = m.x < g.side_w;
         let in_comp = m.y >= g.y_comp && m.y < g.y_comp + g.comp_rows && !in_side;
@@ -1359,16 +1367,14 @@ impl App {
             MouseKind::WheelUp | MouseKind::WheelDown => {
                 let d = if m.kind == MouseKind::WheelUp { -3 } else { 3 };
                 if in_side {
-                    let max = self.chans.len().saturating_sub(self.screen.h.saturating_sub(2));
-                    self.side_top = Some((self.geo.side_start as isize + d).clamp(0, max as isize) as usize);
+                    self.side_st.scroll(d);
                 } else {
                     self.scroll_view(d);
                 }
             }
             MouseKind::Press(0) => {
                 if in_side {
-                    let i = g.side_start + m.y.saturating_sub(1);
-                    if m.y >= 1 && i < self.chans.len() {
+                    if let Some(i) = g.side.row_at(0, m.y).filter(|&i| i < self.chans.len()) {
                         self.open(i);
                     }
                 } else if m.y == 0 {
@@ -1527,6 +1533,14 @@ impl App {
         self.screen.clear();
         if w < 20 || h < 5 {
             self.screen.puts(0, 0, "too small", Style::default(), w);
+            self.screen.flush(None);
+            return;
+        }
+        if let Mode::Image(key) = &self.mode {
+            self.screen.set_images(self.gallery.place_full(key, 1, (w, h - 1)).into_iter().collect());
+            self.screen.fill(0, w, h - 1, Style::new(250, BG_BAR, 0));
+            let x = self.screen.puts(0, h - 1, " IMAGE ", Style::new(16, 110, BOLD), w) + 1;
+            self.screen.puts(x, h - 1, "any key or click to close", Style::new(250, BG_BAR, 0), w);
             self.screen.flush(None);
             return;
         }
@@ -1748,27 +1762,25 @@ impl App {
 
         // sidebar
         if side_w > 0 {
-            for y in 0..h - 1 {
-                self.screen.fill(0, side_w, y, Style::new(0, BG_SIDE, 0));
-                self.screen.put(side_w, y, '│', Style::fg(237));
-            }
+            self.screen.fill(0, side_w, 0, Style::new(0, BG_SIDE, 0));
+            self.screen.put(side_w, 0, '│', Style::fg(237));
             self.screen.puts(1, 0, &self.team, Style::new(ACCENT, BG_SIDE, BOLD), side_w);
-            let list_h = h - 2;
-            let cur = self.cur.unwrap_or(0);
-            let start = self.side_top.unwrap_or_else(|| (cur + 1).saturating_sub(list_h).max(cur.saturating_sub(list_h / 2))).min(self.chans.len().saturating_sub(list_h));
-            self.geo.side_start = start;
-            for (k, c) in self.chans.iter().enumerate().skip(start).take(list_h) {
-                let y = 1 + k - start;
-                let is_cur = Some(k) == self.cur;
-                let bg = if is_cur { BG_SEL } else { BG_SIDE };
-                let st = Style::new(if c.unread { 255 } else { 245 }, bg, if c.unread || is_cur { BOLD } else { 0 });
-                self.screen.fill(0, side_w, y, Style::new(0, bg, 0));
-                let x = self.screen.puts(1, y, &Self::chan_label(c), st, side_w - 1);
-                if c.mentions > 0 {
-                    let s = format!(" {}", c.mentions);
-                    self.screen.puts((side_w - 1 - s.len()).max(x), y, &s, Style::new(C_ME, bg, BOLD), side_w);
-                }
-            }
+            let rows: Vec<sidebar::Row> = self
+                .chans
+                .iter()
+                .enumerate()
+                .map(|(k, c)| sidebar::Row {
+                    text: Self::chan_label(c),
+                    extra: if c.mentions > 0 { c.mentions.to_string() } else { String::new() },
+                    extra_fg: C_ME,
+                    bold: c.unread,
+                    dim: !c.unread && self.cur != Some(k),
+                    current: self.cur == Some(k),
+                    target: Some(k),
+                    ..sidebar::Row::default()
+                })
+                .collect();
+            self.geo.side = sidebar::draw(&mut self.screen, &rows, self.cur, &mut self.side_st, (0, side_w), (1, h - 2), false);
         }
 
         // status line

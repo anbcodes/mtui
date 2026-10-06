@@ -132,9 +132,40 @@ impl Gallery {
     }
 }
 
+impl Gallery {
+    /// The key of the image stored under kitty id `id` (from `Screen::image_at`).
+    pub fn key_of(&self, id: u32) -> Option<&str> {
+        self.slots.iter().find(|(_, s)| matches!(s, Slot::Ready { id: i, .. } if *i == id)).map(|(k, _)| k.as_str())
+    }
+
+    /// A placement showing `key` as large as fits in a `w` x `h` cell area
+    /// at the top left of the screen, centered (for a fullscreen viewer).
+    pub fn place_full(&self, key: &str, pid: u32, (w, h): (usize, usize)) -> Option<Placement> {
+        let Some(Slot::Ready { w: iw, h: ih, .. }) = self.slots.get(key) else { return None };
+        let (cols, rows) = kitty::fit_fill(*iw, *ih, w, h, self.cell);
+        self.place(key, pid, (w.saturating_sub(cols) / 2, h.saturating_sub(rows) / 2), cols, rows, 0, rows)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_of_id() {
+        let mut g = Gallery::new(true);
+        g.slots.insert("k".into(), Slot::Ready { id: 7, w: 1, h: 1 });
+        assert_eq!((g.key_of(7), g.key_of(8)), (Some("k"), None));
+    }
+
+    #[test]
+    fn full() {
+        let mut g = Gallery::new(true);
+        g.slots.insert("k".into(), Slot::Ready { id: 3, w: 100, h: 100 });
+        let p = g.place_full("k", 1, (100, 20)).unwrap();
+        assert_eq!(p.y, 0);
+        assert!(p.rows == 20 && p.x == (100 - p.cols) / 2);
+    }
 
     #[test]
     fn shrinks() {
