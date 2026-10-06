@@ -46,6 +46,7 @@ lists:
 code (tab 6):
   j k Enter    move, open folder/file   h  collapse / parent
   / C-p        find a file         Tab  tree <-> file   b  hide the tree
+  J K          next / previous file (tree or file focus)
   file: j k C-d C-u g G scroll the cursor, h l sideways, o browser, y copy link to the line
   m            markdown files: rendered <-> source
   r reload the tree
@@ -60,7 +61,7 @@ item:
   q Esc h      back
 review (d):
   j k C-d C-u  move / page         g G  top / bottom   h l  scroll sideways
-  ] [          next / prev file    f  pick a file      m  mark viewed, next
+  ] [ J K      next / prev file    f  pick a file      m  mark viewed, next
   Tab          focus the file list b  hide / show it
   } {          next / prev hunk    n N  next / prev comment
   e            whole file          v  select lines     Esc  clear selection

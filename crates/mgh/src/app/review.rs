@@ -636,8 +636,8 @@ impl App {
                 rev.hide_side = !rev.hide_side;
                 rev.side_focus = false;
             }
-            Key::Char(']') | Key::Tab => go_file(rev, rev.cur as isize + 1),
-            Key::Char('[') | Key::BackTab => go_file(rev, rev.cur as isize - 1),
+            Key::Char(']') | Key::Char('J') | Key::Tab => go_file(rev, rev.cur as isize + 1),
+            Key::Char('[') | Key::Char('K') | Key::BackTab => go_file(rev, rev.cur as isize - 1),
             Key::Char('}') => {
                 if let Some(i) = (rev.cursor + 1..rev.rows.len()).find(|&i| rev.rows[i].kind == RK::Hunk) {
                     rev.goto(i);

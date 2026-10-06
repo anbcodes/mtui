@@ -114,6 +114,22 @@ impl Browse {
         self.sel = keep.and_then(|p| self.index.get(&p)).and_then(|i| self.vis.iter().position(|v| v == i)).unwrap_or(self.sel).min(self.vis.len().saturating_sub(1));
     }
 
+    /// Every file in tree order, folders ignored.
+    pub fn file_order(&self) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut stack: Vec<usize> = self.children.get("").map(|v| v.iter().rev().copied().collect()).unwrap_or_default();
+        while let Some(i) = stack.pop() {
+            if self.nodes[i].dir {
+                if let Some(c) = self.children.get(&self.nodes[i].path) {
+                    stack.extend(c.iter().rev().copied());
+                }
+            } else {
+                out.push(i);
+            }
+        }
+        out
+    }
+
     /// Expand every folder above `path` and select it.
     pub fn reveal(&mut self, path: &str) {
         let mut p = String::new();
@@ -253,6 +269,23 @@ impl App {
             Key::Char('H') => return self.set_tab(self.tab + super::TABS.len() - 1),
             Key::Char('R') => return self.pick_repo(),
             Key::Char('/') | Key::Ctrl('p') => return self.code_find(),
+            Key::Char(c @ ('J' | 'K')) => {
+                let order = self.code.file_order();
+                let cur = self.code.path.as_ref().and_then(|p| self.code.index.get(p)).and_then(|i| order.iter().position(|o| o == i));
+                let next = match (cur, c) {
+                    (Some(p), 'J') => order.get(p + 1),
+                    (Some(p), _) => p.checked_sub(1).and_then(|p| order.get(p)),
+                    (None, _) => order.first(),
+                };
+                match next.copied() {
+                    Some(i) => {
+                        let focus = self.code.focus_code;
+                        self.open_node(i, focus);
+                    }
+                    None => self.info("no more files"),
+                }
+                return;
+            }
             Key::Char('r') => return self.ensure_tree(true),
             Key::Char('b') => {
                 self.code.hide_side = !self.code.hide_side;
