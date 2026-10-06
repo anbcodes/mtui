@@ -1,0 +1,9 @@
+[package]
+name = "mvi"
+version.workspace = true
+edition.workspace = true
+description = "A tiny, fast, batteries-included vim-like editor"
+
+[dependencies]
+libc.workspace = true
+mtui.workspace = true

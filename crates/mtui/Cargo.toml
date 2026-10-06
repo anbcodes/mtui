@@ -1,0 +1,8 @@
+[package]
+name = "mtui"
+version.workspace = true
+edition.workspace = true
+description = "Shared terminal plumbing for the m* tools: raw mode, keys, diffed cell grid, regex, fuzzy matching, JSON"
+
+[dependencies]
+libc.workspace = true

@@ -1,0 +1,45 @@
+# Create a Slack app for mslack: https://api.slack.com/apps → Create New App →
+# From an app manifest → paste this. Then:
+#   1. Install it to your workspace and copy the "User OAuth Token" (xoxp-…)
+#      from OAuth & Permissions.
+#   2. For live updates, go to Basic Information → App-Level Tokens, generate
+#      a token with the connections:write scope, and copy it (xapp-…).
+display_information:
+  name: mslack
+  description: Minimal terminal Slack client
+oauth_config:
+  scopes:
+    user:
+      - channels:history
+      - channels:read
+      - channels:write
+      - groups:history
+      - groups:read
+      - groups:write
+      - im:history
+      - im:read
+      - im:write
+      - mpim:history
+      - mpim:read
+      - mpim:write
+      - users:read
+      - chat:write
+      - reactions:read
+      - reactions:write
+settings:
+  event_subscriptions:
+    user_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+      - reaction_added
+      - reaction_removed
+      - channel_rename
+      - group_rename
+      - member_joined_channel
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

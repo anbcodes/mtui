@@ -1,0 +1,11 @@
+[package]
+name = "mslack"
+version.workspace = true
+edition.workspace = true
+description = "A tiny Slack client for the terminal"
+
+[dependencies]
+libc.workspace = true
+mtui.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
