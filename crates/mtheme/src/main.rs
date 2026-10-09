@@ -19,7 +19,7 @@ fn usage() -> ! {
        mtheme list                    the themes and what each app / terminal uses
        mtheme set TARGET THEME        TARGET is an app (mvi mmail mjira mslack mgh),
                                       a terminal (kitty ghostty alacritty)
-                                      firefox, waybar (the bar under sway) or rofi
+                                      firefox, waybar (the bar under sway), rofi,\n                                      sway (window borders / title bars, swaynag) or mako
        mtheme sites ...               per-site CSS themes for Firefox (mtheme sites help)\n       mtheme claude ...              re-colour a copy of Claude desktop's renderer CSS (extract / apply / pack) or 'all'
        mtheme setup TARGET            let a terminal's config read mtheme's colour file
 
@@ -226,7 +226,7 @@ impl App {
             let sel = i == self.sel;
             let bg = if sel { BG_SEL } else { 0 };
             self.screen.fill(0, list_w, y, Style::new(0, bg, 0));
-            let kind = if t.kind == Kind::App { "app" } else if t.kind == Kind::Firefox { "browser" } else if t.kind == Kind::Waybar { "bar" } else if t.kind == Kind::Rofi { "launcher" } else { "terminal" };
+            let kind = if t.kind == Kind::App { "app" } else if t.kind == Kind::Firefox { "browser" } else if t.kind == Kind::Waybar { "bar" } else if t.kind == Kind::Rofi { "launcher" } else if t.kind == Kind::Sway { "windows" } else if t.kind == Kind::Mako { "notifier" } else { "terminal" };
             self.screen.puts(1, y, if sel { "›" } else { " " }, Style::new(ACCENT, bg, BOLD), list_w);
             self.screen.puts(3, y, t.key, Style::new(255, bg, if sel { BOLD } else { 0 }), list_w);
             self.screen.puts(14, y, kind, Style::new(FG_DIM, bg, ITALIC), list_w);

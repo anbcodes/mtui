@@ -14,6 +14,8 @@ pub enum Kind {
     Firefox,
     Waybar,
     Rofi,
+    Sway,
+    Mako,
 }
 
 #[derive(Clone)]
@@ -58,6 +60,12 @@ pub fn all() -> Vec<Target> {
     if on_path("rofi") || config_dir().join("rofi").is_dir() {
         v.push(Target { key: "rofi", kind: Kind::Rofi });
     }
+    if on_path("sway") || sway_config().is_some() {
+        v.push(Target { key: "sway", kind: Kind::Sway });
+    }
+    if on_path("mako") || config_dir().join("mako").is_dir() {
+        v.push(Target { key: "mako", kind: Kind::Mako });
+    }
     if !firefox_profiles().is_empty() {
         v.push(Target { key: "firefox", kind: Kind::Firefox });
     }
@@ -72,6 +80,8 @@ pub fn find(key: &str) -> Option<Target> {
         "firefox" => Some(Target { key: "firefox", kind: Kind::Firefox }),
         "waybar" => Some(Target { key: "waybar", kind: Kind::Waybar }),
         "rofi" => Some(Target { key: "rofi", kind: Kind::Rofi }),
+        "sway" => Some(Target { key: "sway", kind: Kind::Sway }),
+        "mako" => Some(Target { key: "mako", kind: Kind::Mako }),
         _ => None,
     })
 }
@@ -287,6 +297,104 @@ fn waybar_css(t: &ThemeDef) -> String {
         on_blue = ink(p.blue), on_red = ink(p.red), red_t = on_pill(p.red), green_t = on_pill(p.green), yellow_t = on_pill(p.yellow)
     ));
     s
+}
+
+// ---- Sway (window borders / title bars, swaynag) and mako (notifications) ----
+
+/// The config sway reads: its own, else the i3 one it falls back to.
+fn sway_config() -> Option<PathBuf> {
+    [config_dir().join("sway/config"), config_dir().join("i3/config"), home().join(".sway/config"), home().join(".i3/config")].into_iter().find(|p| p.is_file())
+}
+
+fn sway_file() -> PathBuf {
+    theme::config_path().with_file_name("sway.conf")
+}
+
+fn mako_file() -> PathBuf {
+    theme::config_path().with_file_name("mako.conf")
+}
+
+fn mako_config() -> PathBuf {
+    config_dir().join("mako/config")
+}
+
+fn swaynag_config() -> PathBuf {
+    config_dir().join("swaynag/config")
+}
+
+/// `client.*` lines: each is `class border background text indicator child_border`.
+fn sway_client_lines(t: &ThemeDef) -> Vec<String> {
+    let Some(p) = &t.pal else { return Vec::new() };
+    let c = |x: u32| rgb_of(x);
+    let h = |x: u32| hex(rgb_of(x));
+    let light = theme::luminance(c(p.base)) > 0.4;
+    let ink = |bg: u32| hex(theme::legible(if light { c(p.text) } else { c(p.base) }, c(bg)));
+    let line = |class: &str, b: u32, bg: u32, tx: String, ind: u32| format!("client.{} {} {} {} {} {}", class, h(b), h(bg), tx, h(ind), h(b));
+    vec![
+        line("focused", p.blue, p.blue, ink(p.blue), p.blue),
+        line("focused_inactive", p.surface1, p.surface1, h(p.text), p.surface1),
+        line("focused_tab_title", p.surface1, p.surface1, h(p.text), p.surface1),
+        line("unfocused", p.mantle, p.mantle, h(p.overlay1), p.mantle),
+        line("urgent", p.red, p.red, ink(p.red), p.red),
+        line("placeholder", p.mantle, p.mantle, h(p.text), p.mantle),
+        format!("client.background {}", h(p.base)),
+    ]
+}
+
+fn sway_conf(t: &ThemeDef) -> String {
+    let mut s = format!("# {} — written by mtheme; included by your sway config\n", t.name);
+    for l in sway_client_lines(t) {
+        s.push_str(&l);
+        s.push('\n');
+    }
+    s
+}
+
+/// swaynag's own colours (it reads its config, not sway's).
+fn swaynag_conf(t: &ThemeDef) -> String {
+    let mut s = format!("# {} — written by mtheme\n", t.name);
+    let Some(p) = &t.pal else { return s };
+    let c = |x: u32| rgb_of(x);
+    let light = theme::luminance(c(p.base)) > 0.4;
+    let ink = |bg: u32| hex(theme::legible(if light { c(p.text) } else { c(p.base) }, c(bg)));
+    let n = |x: u32| hex(rgb_of(x)).trim_start_matches('#').to_string();
+    s.push_str(&format!(
+        "background={mantle}\ntext={text}\nborder={s1}\nborder-bottom={s1}\nbutton-background={s0}\nbutton-text={text}\n\n\
+         [warning]\nbackground={yellow}\ntext={on_yellow}\nborder={yellow}\nborder-bottom={yellow}\n\n\
+         [error]\nbackground={red}\ntext={on_red}\nborder={red}\nborder-bottom={red}\n",
+        mantle = n(p.mantle), text = n(p.text), s0 = n(p.surface0), s1 = n(p.surface1), yellow = n(p.yellow), red = n(p.red),
+        on_yellow = ink(p.yellow).trim_start_matches('#'), on_red = ink(p.red).trim_start_matches('#')
+    ));
+    s
+}
+
+fn mako_conf(t: &ThemeDef) -> String {
+    let mut s = format!("# {} — written by mtheme; included by your mako config\n", t.name);
+    let Some(p) = &t.pal else { return s };
+    let c = |x: u32| rgb_of(x);
+    let h = |x: u32| hex(rgb_of(x));
+    let light = theme::luminance(c(p.base)) > 0.4;
+    let ink = |bg: u32| hex(theme::legible(if light { c(p.text) } else { c(p.base) }, c(bg)));
+    s.push_str(&format!(
+        "background-color={base}\ntext-color={text}\nborder-color={blue}\nprogress-color=over {s1}\n\n\
+         [urgency=low]\nbackground-color={mantle}\ntext-color={sub}\nborder-color={s2}\n\n\
+         [urgency=high]\nbackground-color={red}\ntext-color={on_red}\nborder-color={red}\n",
+        base = h(p.base), mantle = h(p.mantle), text = h(p.text), sub = h(p.subtext0), blue = h(p.blue), s1 = h(p.surface1), s2 = h(p.surface2), red = h(p.red), on_red = ink(p.red)
+    ));
+    s
+}
+
+fn mako_has_include() -> bool {
+    std::fs::read_to_string(mako_config()).is_ok_and(|s| s.lines().any(|l| !l.trim_start().starts_with('#') && l.contains("mtui/mako.conf")))
+}
+
+fn sway_has_include() -> bool {
+    sway_config().is_some_and(|f| std::fs::read_to_string(f).is_ok_and(|s| s.lines().any(|l| !l.trim_start().starts_with('#') && l.contains("mtui/sway.conf"))))
+}
+
+/// swaynag's config may be ours to rewrite: absent, or marked as written by mtheme.
+fn swaynag_is_ours() -> bool {
+    std::fs::read_to_string(swaynag_config()).map(|s| s.contains("written by mtheme")).unwrap_or(true)
 }
 
 // ---- Firefox: userChrome.css / userContent.css in each install's profile ----
@@ -510,6 +618,8 @@ fn file_of(t: &Target) -> PathBuf {
         Kind::Firefox => firefox_profiles().first().map(|p| p.join("chrome/mtheme-chrome.css")).unwrap_or_default(),
         Kind::Waybar => waybar_file(),
         Kind::Rofi => rofi_file(),
+        Kind::Sway => sway_file(),
+        Kind::Mako => mako_file(),
         Kind::App => theme::config_path(),
     }
 }
@@ -532,6 +642,8 @@ pub fn needs_setup(t: &Target) -> Option<String> {
             let ok = std::fs::read_to_string(&conf).is_ok_and(|s| s.lines().any(|l| !l.trim_start().starts_with("//") && l.contains("mtheme.rasi")));
             (!ok).then(|| format!("{} does not load mtheme's theme; press I to add the @import", conf.display()))
         }
+        Kind::Sway => (!sway_has_include()).then(|| format!("{} does not include mtheme's colours; press I to add `include {}`", sway_config().map(|p| p.display().to_string()).unwrap_or("sway's config".into()), sway_file().display())),
+        Kind::Mako => (!mako_has_include()).then(|| format!("{} does not include mtheme's colours; press I to add the include line", mako_config().display())),
         Kind::Waybar => {
             let Some(style) = waybar_style() else { return Some("could not find waybar's stylesheet; set MTHEME_WAYBAR_STYLE=/path/to/style.css".into()) };
             let ok = ff_has_css_import(&style, "mtui/waybar.css");
@@ -572,6 +684,36 @@ pub fn install(t: &Target) -> Result<String, String> {
         text.push_str(&format!("@import \"{}\"\n", rofi_file().display()));
         write(&conf, &text)?;
         return Ok(format!("added an @import of {} to {}", rofi_file().display(), conf.display()));
+    }
+    if t.kind == Kind::Sway {
+        let Some(conf) = sway_config() else { return Err("could not find sway's config (~/.config/sway/config or ~/.config/i3/config)".into()) };
+        if sway_has_include() {
+            return Ok("already set up".into());
+        }
+        if !sway_file().exists() {
+            write(&sway_file(), &sway_conf(&theme::THEMES[theme::lookup("sway").unwrap_or(0)]))?;
+        }
+        let mut text = std::fs::read_to_string(&conf).map_err(|e| format!("{}: {}", conf.display(), e))?;
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        // last, so the colours win over any client.* lines above it
+        text.push_str(&format!("include {}\n", sway_file().display()));
+        write(&conf, &text)?;
+        return Ok(format!("added `include {}` to {}", sway_file().display(), conf.display()));
+    }
+    if t.kind == Kind::Mako {
+        if mako_has_include() {
+            return Ok("already set up".into());
+        }
+        if !mako_file().exists() {
+            write(&mako_file(), &mako_conf(&theme::THEMES[theme::lookup("mako").unwrap_or(0)]))?;
+        }
+        let conf = mako_config();
+        let old = std::fs::read_to_string(&conf).unwrap_or_default();
+        // first, so it is read as global options; your own lines after it still win
+        write(&conf, &format!("include={}\n{}", mako_file().display(), old))?;
+        return Ok(format!("added include={} to {}", mako_file().display(), conf.display()));
     }
     if t.kind == Kind::Waybar {
         let Some(style) = waybar_style() else { return Err("could not find waybar's stylesheet; set MTHEME_WAYBAR_STYLE=/path/to/style.css".into()) };
@@ -659,6 +801,23 @@ pub fn apply(t: &Target, i: usize) -> Result<String, String> {
             write(&path, &rofi_rasi(def))?;
             Ok(format!("rofi: {} (used the next time rofi opens)", def.name))
         }
+        Kind::Sway => {
+            write(&path, &sway_conf(def))?;
+            let mut live = true;
+            for l in sway_client_lines(def) {
+                let args: Vec<&str> = l.split(' ').collect();
+                live &= quiet("swaymsg", &args);
+            }
+            if swaynag_is_ours() {
+                write(&swaynag_config(), &swaynag_conf(def))?;
+            }
+            Ok(format!("sway: {}{}", def.name, if live { "" } else { " (written; reload sway)" }))
+        }
+        Kind::Mako => {
+            write(&path, &mako_conf(def))?;
+            let live = quiet("makoctl", &["reload"]);
+            Ok(format!("mako: {}{}", def.name, if live { "" } else { " (written; run makoctl reload)" }))
+        }
         Kind::Waybar => {
             write(&path, &waybar_css(def))?;
             let live = quiet("pkill", &["-USR2", "-x", "waybar"]);
@@ -692,6 +851,8 @@ mod tests {
         assert!(alacritty_conf(t).contains("[colors.bright]") && alacritty_conf(t).contains("white = \"#adc9bc\""));
         assert!(!kitty_conf(&theme::THEMES[0]).contains("color0"));
         assert!(rofi_rasi(t).contains("bg: #1e2528") && rofi_rasi(&theme::THEMES[0]).lines().count() == 1);
+        assert!(sway_conf(t).contains("client.focused #b2caed") && mako_conf(t).contains("background-color=#1e2528") && swaynag_conf(t).contains("[error]"));
+        assert!(sway_client_lines(&theme::THEMES[0]).is_empty() && mako_conf(&theme::THEMES[0]).lines().count() == 1);
         assert_eq!(bar_background(t), "#191e21");
         let wb = waybar_css(t);
         assert!(wb.contains("window#waybar { background: #191e21") && wb.contains(".ws.focused { background: #b2caed;"));
