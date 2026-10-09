@@ -35,7 +35,7 @@ pub struct Site {
     pub firefox: bool,
 }
 
-const BUILTIN: [(&str, &str); 2] = [("fastmail", include_str!("../sites/fastmail.css")), ("claude-app", include_str!("../sites/claude-app.css"))];
+const BUILTIN: [(&str, &str); 6] = [("fastmail", include_str!("../sites/fastmail.css")), ("claude-app", include_str!("../sites/claude-app.css")), ("duckduckgo", include_str!("../sites/duckduckgo.css")), ("submitty", include_str!("../sites/submitty.css")), ("outlook", include_str!("../sites/outlook.css")), ("chatgpt", include_str!("../sites/chatgpt.css"))];
 
 fn user_dir() -> PathBuf {
     theme::config_path().with_file_name("sites")

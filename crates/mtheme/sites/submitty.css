@@ -1,0 +1,179 @@
+/* mtheme-site: submitty.cs.rpi.edu */
+/* Submitty is built on ~180 custom properties on :root, with its own dark mode as `[data-theme="dark"]`
+   overrides (76 of them) and a pure-black variant. All of them are replaced with the active theme,
+   using Submitty's dark values as the model: neutrals become ramp steps, hues become the palette's
+   nearest accent. Names are misleading under a dark scheme (--default-white is the surface colour,
+   --default-black the text colour), so the model's values are what matter. Generated from the site's
+   rules by a script. Not covered: the forum category colours (data), images, the logo. */
+:root, html[data-theme], [data-theme="dark"], :root[data-theme="dark"], [data-black_mode="black"][data-theme="dark"] {
+  color-scheme: {{scheme}} !important;
+  --danger-red: {{if-dark chroma red 0.4960 | chroma red 0.5040}} !important;
+  --focus-danger-red: {{red}} !important;
+  --hover-active-danger-red: {{red}} !important;
+  --disabled-danger-red: {{if-dark chroma red 0.5964 | chroma red 0.4036}} !important;
+  --warning-brown: {{if-dark chroma orange 0.5802 | chroma orange 0.4198}} !important;
+  --focus-warning-brown: {{orange}} !important;
+  --hover-warning-brown: {{if-dark chroma orange 0.5521 | chroma orange 0.4479}} !important;
+  --active-warning-brown: {{orange}} !important;
+  --good-green: {{green}} !important;
+  --hover-good-green: {{green}} !important;
+  --disabled-good-green: {{green}} !important;
+  --actionable-blue: {{if-dark chroma skye 0.6141 | chroma skye 0.3859}} !important;
+  --focus-actionable-blue: {{skye}} !important;
+  --hover-actionable-blue: {{if-dark chroma skye 0.5529 | chroma skye 0.4471}} !important;
+  --hover-light-border-actionable-blue: {{if-dark chroma blue 0.5581 | chroma blue 0.4419}} !important;
+  --hover-border-actionable-blue: {{if-dark chroma blue 0.7159 | chroma blue 0.2841}} !important;
+  --hover-dark-border-actionable-blue: {{if-dark chroma blue 0.8790 | chroma blue 0.1210}} !important;
+  --hover-notification: {{if-dark chroma blue 0.7863 | chroma blue 0.2137}} !important;
+  --standard-lightskyblue: {{if-dark chroma skye 0.5242 | chroma skye 0.4758}} !important;
+  --standard-mediumorchid: {{if-dark chroma purple 0.5047 | chroma purple 0.4953}} !important;
+  --info-blue: {{skye}} !important;
+  --hover-focus-info-blue: {{skye}} !important;
+  --hover-active-all-info-blue: {{skye}} !important;
+  --default-white: {{if-dark ramp 0.8044 | ramp 0.1956}} !important;
+  --default-black: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --always-default-white: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --badge-backgroud-red: {{red}} !important;
+  --dark-badge-background-red: {{if-dark chroma red 0.5964 | chroma red 0.4036}} !important;
+  --error-alert-dark-red: {{red}} !important;
+  --gray-red: {{if-dark chroma red 0.5337 | chroma red 0.4663}} !important;
+  --alert-background-bronze: {{if-dark ramp 0.0214 | ramp 0.9786}} !important;
+  --alert-border-bronze: {{if-dark chroma yellow 0.7516 | chroma yellow 0.2484}} !important;
+  --alert-bronze: {{orange}} !important;
+  --alert-success-green: {{if-dark chroma green 0.4798 | chroma green 0.5202}} !important;
+  --alert-background-success-green: {{if-dark ramp 0.0581 | ramp 0.9419}} !important;
+  --alert-border-success-green: {{if-dark chroma lime 0.0826 | chroma lime 0.9174}} !important;
+  --alert-danger-red: {{if-dark chroma red 0.7566 | chroma red 0.2434}} !important;
+  --alert-border-danger-red: {{if-dark ramp 0.0836 | ramp 0.9164}} !important;
+  --alert-background-danger-red: {{red}} !important;
+  --alert-info-blue: {{skye}} !important;
+  --alert-background-blue: {{if-dark ramp 0.5196 | ramp 0.4804}} !important;
+  --alert-border-blue: {{if-dark chroma skye 0.6499 | chroma skye 0.3501}} !important;
+  --alert-warning-yellow: {{yellow}} !important;
+  --alert-background-warning-yellow: {{if-dark chroma yellow 0.0337 | chroma yellow 0.9663}} !important;
+  --alert-border-yellow: {{if-dark chroma yellow 0.0806 | chroma yellow 0.9194}} !important;
+  --alert-invalid-entry-pink: {{if-dark chroma red 0.0765 | chroma red 0.9235}} !important;
+  --standard-pale-blue-gray: {{if-dark ramp 0.9008 | ramp 0.0992}} !important;
+  --btn-standard-pale-blue-gray: {{if-dark ramp 0.0463 | ramp 0.9537}} !important;
+  --btn-default-active: {{if-dark ramp 0.5399 | ramp 0.4601}} !important;
+  --btn-default-white: {{if-dark ramp 0.6804 | ramp 0.3196}} !important;
+  --btn-default-hover: {{if-dark ramp 0.6394 | ramp 0.3606}} !important;
+  --standard-light-blue-gray: {{blue}} !important;
+  --standard-pale-gray: {{if-dark ramp 0.0284 | ramp 0.9716}} !important;
+  --standard-hover-light-gray: {{if-dark ramp 0.8705 | ramp 0.1295}} !important;
+  --standard-light-gray: {{if-dark ramp 0.5018 | ramp 0.4982}} !important;
+  --standard-light-medium-gray: {{if-dark ramp 0.2142 | ramp 0.7858}} !important;
+  --standard-medium-gray: {{if-dark ramp 0.3039 | ramp 0.6961}} !important;
+  --standard-medium-dark-gray: {{if-dark ramp 0.2506 | ramp 0.7494}} !important;
+  --standard-dark-gray: {{if-dark ramp 0.6598 | ramp 0.3402}} !important;
+  --standard-deep-dark-gray: {{if-dark ramp 0.8568 | ramp 0.1432}} !important;
+  --standard-gray-black: {{if-dark ramp 0.9651 | ramp 0.0349}} !important;
+  --solution-text-background: {{if-dark ramp 0.5593 | ramp 0.4407}} !important;
+  --standard-pale-blue: {{if-dark chroma skye 0.0603 | chroma skye 0.9397}} !important;
+  --standard-focus-cornflower-blue: {{if-dark chroma blue 0.7770 | chroma blue 0.2230}} !important;
+  --standard-medium-blue: {{if-dark chroma blue 0.4982 | chroma blue 0.5018}} !important;
+  --standard-medium-vibrant-blue: {{blue}} !important;
+  --standard-aqua: {{skye}} !important;
+  --standard-dark-blue: {{if-dark chroma blue 0.6900 | chroma blue 0.3100}} !important;
+  --standard-medium-dark-blue: {{if-dark chroma blue 0.6215 | chroma blue 0.3785}} !important;
+  --standard-deep-blue: {{blue}} !important;
+  --standard-gray-blue: {{skye}} !important;
+  --standard-vibrant-red: {{red}} !important;
+  --standard-light-red: {{red}} !important;
+  --standard-medium-red: {{if-dark chroma red 0.5494 | chroma red 0.4506}} !important;
+  --standard-medium-dark-red: {{if-dark chroma red 0.6705 | chroma red 0.3295}} !important;
+  --standard-red-orange: {{red}} !important;
+  --standard-light-orange: {{orange}} !important;
+  --standard-medium-orange: {{orange}} !important;
+  --standard-vibrant-orange: {{yellow}} !important;
+  --standard-creamsicle-orange: {{orange}} !important;
+  --standard-peachpuff: {{if-dark chroma orange 0.4864 | chroma orange 0.5136}} !important;
+  --standard-vibrant-yellow: {{if-dark chroma yellow 0.5208 | chroma yellow 0.4792}} !important;
+  --standard-plum-purple: {{if-dark chroma purple 0.6119 | chroma purple 0.3881}} !important;
+  --standard-vibrant-pink: {{red}} !important;
+  --standard-vibrant-pink-red: {{if-dark chroma pink 0.5977 | chroma pink 0.4023}} !important;
+  --standard-vibrant-green: {{green}} !important;
+  --standard-medium-green: {{green}} !important;
+  --standard-dark-green: {{green}} !important;
+  --standard-deep-dark-green: {{if-dark chroma green 0.6502 | chroma green 0.3498}} !important;
+  --standard-mint-green: {{aqua}} !important;
+  --standard-dark-mint-green: {{aqua}} !important;
+  --standard-medium-dark-lime-green: {{green}} !important;
+  --standard-vibrant-dark-blue: {{if-dark chroma skye 0.6019 | chroma skye 0.3981}} !important;
+  --standard-bronze: {{yellow}} !important;
+  --standard-pastel-pink: {{if-dark ramp 0.0836 | ramp 0.9164}} !important;
+  --standard-light-pink: {{red}} !important;
+  --standard-tangerine-yellow: {{yellow}} !important;
+  --standard-pale-yellow: {{if-dark chroma yellow 0.0158 | chroma yellow 0.9842}} !important;
+  --standard-light-yellow: {{if-dark chroma yellow 0.0202 | chroma yellow 0.9798}} !important;
+  --standard-light-yellow-brown: {{if-dark chroma yellow 0.4984 | chroma yellow 0.5016}} !important;
+  --standard-beige: {{if-dark ramp 0.4965 | ramp 0.5035}} !important;
+  --standard-light-green: {{if-dark chroma green 0.5489 | chroma green 0.4511}} !important;
+  --standard-pastel-blue: {{if-dark chroma skye 0.6084 | chroma skye 0.3916}} !important;
+  --standard-light-blue: {{blue}} !important;
+  --standard-light-seafoam: {{aqua}} !important;
+  --background-blue: {{if-dark ramp 0.9096 | ramp 0.0904}} !important;
+  --main-body-white: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --subheading-underscore-grey: {{if-dark ramp 0.4157 | ramp 0.5843}} !important;
+  --subtle-grey-background: {{if-dark ramp 0.6598 | ramp 0.3402}} !important;
+  --focus-dropdown: {{if-dark ramp 0.0284 | ramp 0.9716}} !important;
+  --text-black: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --text-white: {{if-dark ramp 1.0000 | ramp 0.0000}} !important;
+  --btn-text-white: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --btn-text-black: {{if-dark ramp 1.0000 | ramp 0.0000}} !important;
+  --btn-default-text: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --deleted-and-unviewed-thread: {{if-dark chroma blue 0.6260 | chroma blue 0.3740}} !important;
+  --deleted-discussion-post-grey: {{if-dark chroma blue 0.7863 | chroma blue 0.2137}} !important;
+  --important-post: {{yellow}} !important;
+  --attachment-box-color: {{if-dark ramp 0.7166 | ramp 0.2834}} !important;
+  --file-upload-table-hover: {{if-dark ramp 0.7166 | ramp 0.2834}} !important;
+  --upduck-yellow: {{yellow}} !important;
+  --notebook-builder-form-options-orange: {{if-dark chroma orange 0.5751 | chroma orange 0.4249}} !important;
+  --notebook-builder-itempool-green: {{if-dark chroma aqua 0.4887 | chroma aqua 0.5113}} !important;
+  --external-link-blue: {{blue}} !important;
+  --external-link-hover: {{blue}} !important;
+  --external-link-active: {{if-dark chroma red 0.7047 | chroma red 0.2953}} !important;
+  --selected-nav-sidebar: {{if-dark ramp 0.6701 | ramp 0.3299}} !important;
+  --nav-sidebar-text: {{if-dark ramp 0.1690 | ramp 0.8310}} !important;
+  --sidebar-hover-text: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --table-info: {{if-dark ramp 0.6036 | ramp 0.3964}} !important;
+  --date-picker-green: {{if-dark chroma green 0.5790 | chroma green 0.4210}} !important;
+  --date-picker-yellow: {{yellow}} !important;
+  --date-picker-red: {{if-dark chroma red 0.6378 | chroma red 0.3622}} !important;
+  --simple-full-credit-dark-blue: {{skye}} !important;
+  --simple-half-credit-light-blue: {{skye}} !important;
+  --simple-save-error-red: {{red}} !important;
+  --peer-feedback-red: {{if-dark chroma red 0.6707 | chroma red 0.3293}} !important;
+  --peer-feedback-red-translucent: {{alpha red 0.69}} !important;
+  --peer-feedback-green: {{if-dark chroma green 0.5375 | chroma green 0.4625}} !important;
+  --box-shadow-very-transparent: rgba(0, 0, 0, 0.0) !important;
+  --box-shadow-slightly-transparent: rgba(0, 0, 0, 0.0) !important;
+  --black-moderately-transparent: rgba(0, 0, 0, 0.5) !important;
+  --white-moderately-transparent: rgba(0, 0, 0, 0.0) !important;
+  --no-image-available: {{if-dark ramp 0.2655 | ramp 0.7345}} !important;
+  --standard-input-background: {{if-dark ramp 0.7166 | ramp 0.2834}} !important;
+  --checkbox-black: {{blue}} !important;
+  --overall-comment: {{if-dark ramp 0.6754 | ramp 0.3246}} !important;
+  --grading-note: {{if-dark ramp 0.2845 | ramp 0.7155}} !important;
+  --file-browser-blue: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --extra-credit-blue: {{skye}} !important;
+  --viewed-content: {{if-dark ramp 0.6706 | ramp 0.3294}} !important;
+  --code-box-background-light-gray: {{if-dark ramp 0.8668 | ramp 0.1332}} !important;
+  --code-box-font-color-dark-gray: {{if-dark ramp 0.2486 | ramp 0.7514}} !important;
+  --invisible: rgba(0, 0, 0, 0.0) !important;
+  --diff-background-all: {{if-dark ramp 0.9319 | ramp 0.0681}} !important;
+  --diff-background-actual: {{if-dark ramp 0.9154 | ramp 0.0846}} !important;
+  --diff-background-expected: {{if-dark ramp 0.9063 | ramp 0.0937}} !important;
+  --diff-char-background-actual: {{if-dark chroma red 0.7243 | chroma red 0.2757}} !important;
+  --diff-char-background-expected: {{if-dark chroma green 0.7039 | chroma green 0.2961}} !important;
+}
+body { background-color: {{base}} !important; color: {{text}} !important; }
+/* the header carries a dark and a white logo and shows one by the site's own mode; follow the theme instead */
+img[src*="submitty_logo.png"] { display: {{if-dark raw none | raw inline-block}} !important; }
+img[src*="submitty_logo_white.png"] { display: {{if-dark raw inline-block | raw none}} !important; }
+/* form fields and the code editor use their own colours */
+textarea, input[type="text"], input[type="number"], input[type="search"], input[type="email"], input[type="password"], select, .CodeMirror, .CodeMirror-gutters, .CodeMirror-scroll {
+  background-color: {{surface0}} !important; color: {{text}} !important; border-color: {{surface2}} !important;
+}
+.CodeMirror-cursor { border-left-color: {{text}} !important; }
+.CodeMirror-linenumber { color: {{overlay1}} !important; }

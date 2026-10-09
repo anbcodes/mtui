@@ -1,0 +1,128 @@
+/* mtheme-site: duckduckgo.com */
+/* DuckDuckGo (search, duck.ai, the start page) draws from ~80 short-named custom properties
+   (--gj, --hd, ...) set under .theme-light / .theme-dark on the root. Both sets are replaced with
+   the active theme, using the site's own dark values as the model: neutrals become ramp steps,
+   hues become the palette's nearest accent, translucent whites become `text` at the same alpha.
+   Generated from the two rules by a script, so a new site build may add variables that need
+   adding here. Not covered: the .motif-* promo cards, which re-colour themselves locally. */
+html.theme-light, html.theme-dark, .theme-light, .theme-dark {
+  color-scheme: {{scheme}} !important;
+  --gj: {{if-dark ramp 0.9651 | ramp 0.0349}} !important;
+  --gk: {{if-dark ramp 0.9451 | ramp 0.0549}} !important;
+  --gl: {{if-dark ramp 0.9451 | ramp 0.0549}} !important;
+  --gm: {{if-dark ramp 0.9039 | ramp 0.0961}} !important;
+  --gn: {{if-dark ramp 0.8478 | ramp 0.1522}} !important;
+  --na: {{if-dark ramp 0.0579 | ramp 0.9421}} !important;
+  --go: {{alpha text 0.06}} !important;
+  --gp: {{alpha text 0.12}} !important;
+  --gq: {{alpha text 0.24}} !important;
+  --gr: {{alpha text 0.03}} !important;
+  --gs: {{alpha text 0.06}} !important;
+  --gt: {{alpha text 0.09}} !important;
+  --gu: {{alpha text 0.06}} !important;
+  --gv: {{alpha text 0.09}} !important;
+  --gw: {{alpha text 0.12}} !important;
+  --gx: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --gy: {{alpha text 0.66}} !important;
+  --gz: {{alpha text 0.36}} !important;
+  --ha: {{if-dark ramp 0.0000 | ramp 1.0000}} !important;
+  --hb: {{alpha text 0.6}} !important;
+  --hc: {{alpha text 0.36}} !important;
+  --hd: {{blue}} !important;
+  --he: {{blue}} !important;
+  --hf: {{if-dark chroma blue 0.5139 | chroma blue 0.4861}} !important;
+  --hg: {{if-dark chroma blue 0.5139 | chroma blue 0.4861}} !important;
+  --hh: {{alpha blue 0.2}} !important;
+  --hi: {{alpha blue 0.12}} !important;
+  --hj: {{blue}} !important;
+  --hk: {{blue}} !important;
+  --hl: {{if-dark chroma blue 0.5139 | chroma blue 0.4861}} !important;
+  --ds-accent-primary-content-color: {{if-dark chroma blue 0.9572 | chroma blue 0.0428}} !important;
+  --hm: {{alpha blue 0.72}} !important;
+  --hn: {{alpha blue 0.48}} !important;
+  --ho: {{if-dark chroma blue 0.5139 | chroma blue 0.4861}} !important;
+  --hp: {{if-dark chroma blue 0.6129 | chroma blue 0.3871}} !important;
+  --hq: {{if-dark chroma blue 0.7608 | chroma blue 0.2392}} !important;
+  --hr: {{alpha skye 0.2}} !important;
+  --hs: {{alpha skye 0.12}} !important;
+  --ht: {{if-dark chroma skye 0.0742 | chroma skye 0.9258}} !important;
+  --hu: {{blue}} !important;
+  --hv: {{blue}} !important;
+  --hw: {{if-dark ramp 0.0142 | ramp 0.9858}} !important;
+  --hx: {{alpha text 0.72}} !important;
+  --hy: {{alpha text 0.48}} !important;
+  --hz: {{alpha text 0.12}} !important;
+  --ia: {{alpha text 0.18}} !important;
+  --ib: {{alpha text 0.24}} !important;
+  --ic: {{alpha text 0.36}} !important;
+  --id: {{alpha text 0.64}} !important;
+  --ie: {{alpha text 0.72}} !important;
+  --if: {{alpha text 0.8}} !important;
+  --nb: {{alpha text 0.12}} !important;
+  --nc: {{alpha text 0.18}} !important;
+  --nd: {{alpha text 0.36}} !important;
+  --ig: {{if-dark ramp 0.9088 | ramp 0.0912}} !important;
+  --ux: {{if-dark ramp 0.7270 | ramp 0.2730}} !important;
+  --uy: {{if-dark ramp 0.4157 | ramp 0.5843}} !important;
+  --ih: {{alpha text 0.12}} !important;
+  --ne: {{if-dark ramp 0.8478 | ramp 0.1522}} !important;
+  --ii: {{alpha text 0.12}} !important;
+  --ij: {{alpha text 0.06}} !important;
+  --ik: {{alpha text 0.12}} !important;
+  --il: rgba(0, 0, 0, 0.12) !important;
+  --im: rgba(0, 0, 0, 0.16) !important;
+  --in: rgba(0, 0, 0, 0.24) !important;
+  --io: rgba(0, 0, 0, 0.32) !important;
+  --ip: {{red}} !important;
+  --iq: {{if-dark chroma red 0.5051 | chroma red 0.4949}} !important;
+  --ir: {{if-dark chroma red 0.5509 | chroma red 0.4491}} !important;
+  --is: {{alpha red 0.2}} !important;
+  --it: {{alpha red 0.12}} !important;
+  --iu: {{red}} !important;
+  --iv: {{red}} !important;
+  --iw: {{if-dark chroma red 0.5051 | chroma red 0.4949}} !important;
+  --ix: {{if-dark ramp 1.0000 | ramp 0.0000}} !important;
+  --iy: rgba(0, 0, 0, 0.9) !important;
+  --iz: rgba(0, 0, 0, 0.6) !important;
+  --ja: {{green}} !important;
+  --jb: {{orange}} !important;
+  --jc: {{if-dark chroma red 0.5051 | chroma red 0.4949}} !important;
+  --nf: {{if-dark ramp 0.4157 | ramp 0.5843}} !important;
+}
+body, html { background-color: {{base}} !important; color: {{text}} !important; }
+/* the wordmark is a dark-text image; flip it on dark themes, keeping the duck's own colours */
+img[src*="logo-horizontal"] { filter: {{if-dark raw invert(1) hue-rotate(180deg) | raw none}} !important; }
+/* the results page (and its header) is older CSS with hard-coded colours rather than the variables above */
+body.body--serp .header-wrap, body.body--serp [class*="header-wrap"], body.body--serp #header_wrapper { background-color: {{base}} !important; color: {{text}} !important; }
+body.body--serp input, body.body--serp textarea { background-color: {{surface0}} !important; color: {{text}} !important; border-color: {{surface2}} !important; }
+body.body--serp input::placeholder { color: {{overlay1}} !important; }
+body.body--serp a, body.body--serp a span { color: {{blue}} !important; }
+body.body--serp a:visited, body.body--serp a:visited span { color: {{purple}} !important; }
+body.body--serp article, body.body--serp article div, body.body--serp article span { color: {{subtext0}} !important; }
+body.body--serp article a, body.body--serp article a span { color: {{blue}} !important; }
+body.body--serp article a:visited, body.body--serp article a:visited span { color: {{purple}} !important; }
+body.body--serp article a[data-testid="result-extras-url-link"], body.body--serp article a[data-testid="result-extras-url-link"] span { color: {{green}} !important; }
+body.body--serp article [data-testid="result-extras-site-name"], body.body--serp article [data-testid="result-extras-site-name"] span { color: {{text}} !important; }
+body.body--serp article b, body.body--serp article strong { color: {{text}} !important; }
+body.body--serp [data-testid="sidebar"], body.body--serp [data-testid="sidebar"] div { color: {{subtext0}} !important; }
+body.body--serp button { color: {{text}} !important; }
+body.body--serp article p { color: {{text}} !important; }
+body.body--serp .search-form-input-wrapper, body.body--serp [class*="search-form-input-wrapper"] { background-color: {{surface0}} !important; }
+body.body--serp .header-wrap span, body.body--serp [class*="header-wrap"] span { color: {{blue}} !important; }
+body.body--serp strong { color: {{subtext0}} !important; }
+body.body--serp strong:first-child { color: {{green}} !important; }
+/* white scroll-fade gradients at the ends of the tab and filter rows (::before/::after of nav and ul) */
+body.body--serp nav::before, body.body--serp nav::after, body.body--serp ul::before, body.body--serp ul::after { background-image: none !important; box-shadow: none !important; }
+body.body--serp button[type="submit"], body.body--serp [class*="search-form-input-wrapper"] button { background-color: {{surface1}} !important; color: {{text}} !important; }
+/* hard-coded white pieces with stable attributes: Search Assist, Duck.ai chat box, menus, code blocks */
+body.body--serp form[action*="ia=chat"]::after { background-image: none !important; }
+body.body--serp [data-assist-icon-trigger], body.body--serp [data-testid="duckassist-stream-more-pi"], body.body--serp [data-testid="ask"], body.body--serp [data-testid="react-carousel-next"], body.body--serp [role="menu"], body.body--serp button[aria-label="Dismiss promotion"], body.body--serp .nav-menu--slideout, body.body--serp .footer { background-color: {{surface0}} !important; color: {{text}} !important; border-color: {{surface2}} !important; }
+body.body--serp pre, body.body--serp pre.prettyprint { background-color: {{mantle}} !important; color: {{text}} !important; }
+body.body--serp [role="menu"] a, body.body--serp [role="menu"] span { color: {{text}} !important; }
+/* search suggestions under the search box (home and results page) */
+.search__autocomplete, .acp-wrap, .acp-wrap .acp, .acp, [role="listbox"], [class*="utocomplete"], [class*="uggestion"] { background-color: {{mantle}} !important; color: {{text}} !important; border-color: {{surface1}} !important; }
+.acp-wrap .acp--highlight, .acp--highlight, [role="option"][aria-selected="true"], .acp:hover, [role="option"]:hover { background-color: {{surface1}} !important; color: {{text}} !important; }
+.acp-wrap .acp, .acp-wrap .acp *, [role="option"], [role="option"] * { color: {{text}} !important; }
+.acp__sec, .acp-wrap .acp__sec, [role="option"] em, .acp-wrap b { color: {{subtext0}} !important; }
+/* colours for duckduckgo.js (the userscript mtheme installs); empty on Classic, where the script does nothing */
+html { --mt-link: {{blue}}; --mt-surface: {{surface0}}; --mt-text: {{text}}; --mt-base: {{base}}; }
