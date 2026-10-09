@@ -188,4 +188,35 @@ impl Net {
             (tag, r)
         });
     }
+
+    /// Upload files (external-upload flow) and share them in `channel`, with
+    /// `text` as the comment. Replies as `Tag::Done("uploaded")`.
+    pub fn upload(&self, channel: &str, thread: Option<&str>, text: &str, files: Vec<(String, Vec<u8>)>) {
+        let (channel, thread, text) = (channel.to_string(), thread.map(str::to_string), text.to_string());
+        self.submit(move |c, auth| {
+            let r = (|| {
+                let mut ids = Vec::new();
+                for (name, data) in &files {
+                    let len = data.len().to_string();
+                    let v = call_retry(c, auth, "files.getUploadURLExternal", &own(&[("filename", name), ("length", &len)]))?;
+                    let (url, id) = (v.get("upload_url").str().to_string(), v.get("file_id").str().to_string());
+                    let res = c.request("POST", &url, &[("Content-Type", "application/octet-stream")], data)?;
+                    if res.status >= 300 {
+                        return Err(format!("upload failed (HTTP {})", res.status));
+                    }
+                    ids.push(format!("{{\"id\":{},\"title\":{}}}", json::quote(&id), json::quote(name)));
+                }
+                let list = format!("[{}]", ids.join(","));
+                let mut p = own(&[("files", &list), ("channel_id", &channel)]);
+                if !text.is_empty() {
+                    p.push(("initial_comment".into(), text.clone()));
+                }
+                if let Some(t) = &thread {
+                    p.push(("thread_ts".into(), t.clone()));
+                }
+                call_retry(c, auth, "files.completeUploadExternal", &p)
+            })();
+            (Tag::Done("uploaded"), r)
+        });
+    }
 }

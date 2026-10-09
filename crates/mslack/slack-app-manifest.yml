@@ -24,6 +24,7 @@ oauth_config:
       - mpim:write
       - users:read
       - chat:write
+      - files:write
       - reactions:read
       - reactions:write
 settings:

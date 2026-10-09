@@ -186,6 +186,8 @@ pub struct App {
     chan_names: HashMap<String, String>,
     mode: Mode,
     input: LineEdit,
+    /// Images staged for the next send: (file name, bytes).
+    attach: Vec<(String, Vec<u8>)>,
     editing: Option<String>,
     comp: Option<(usize, Vec<String>, usize)>,
     sel: Option<usize>,
@@ -285,6 +287,7 @@ impl App {
             chan_names: HashMap::new(),
             mode: Mode::Normal,
             input: LineEdit::new(),
+            attach: Vec::new(),
             editing: None,
             comp: None,
             sel: None,
@@ -932,10 +935,48 @@ impl App {
         }
     }
 
+    /// Stage the clipboard image (wl-paste / xclip / pngpaste) for the next send.
+    fn paste_image(&mut self) {
+        let tries: [(&str, &[&str]); 3] = [
+            ("wl-paste", &["--no-newline", "--type", "image/png"]),
+            ("xclip", &["-selection", "clipboard", "-t", "image/png", "-o"]),
+            ("pngpaste", &["-"]),
+        ];
+        for (cmd, args) in tries {
+            let out = std::process::Command::new(cmd).args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output();
+            if let Ok(o) = out {
+                if o.status.success() && o.stdout.starts_with(b"\x89PNG") {
+                    let n = self.attach.len() + 1;
+                    self.attach.push((format!("clipboard-{}.png", n), o.stdout));
+                    return self.info(format!("{} image(s) attached", n));
+                }
+            }
+        }
+        self.error("no image on the clipboard (needs wl-paste, xclip or pngpaste)");
+    }
+
+    /// A pasted path to an existing image file attaches it instead of inserting text.
+    fn paste_file(&mut self, s: &str) -> bool {
+        let p = s.trim().trim_matches('\'');
+        let p = p.strip_prefix("file://").unwrap_or(p);
+        let ext = p.rsplit('.').next().unwrap_or("").to_lowercase();
+        if !p.starts_with('/') || !["png", "jpg", "jpeg", "gif", "webp"].contains(&ext.as_str()) {
+            return false;
+        }
+        match std::fs::read(p) {
+            Ok(d) => {
+                self.attach.push((p.rsplit('/').next().unwrap_or(p).to_string(), d));
+                self.info(format!("{} image(s) attached", self.attach.len()));
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     fn send(&mut self) {
         let Some(ci) = self.cur else { return };
         let raw = self.input.take();
-        if raw.trim().is_empty() {
+        if raw.trim().is_empty() && (self.attach.is_empty() || self.editing.is_some()) {
             return;
         }
         let text = format::encode(raw.trim_end(), &self.handles, &self.chans.iter().filter(|c| matches!(c.kind, Kind::Public | Kind::Private)).map(|c| (c.name.to_lowercase(), c.id.clone())).collect());
@@ -945,6 +986,11 @@ impl App {
             return;
         }
         let thread = self.thread.as_ref().map(|t| t.ts.clone());
+        if !self.attach.is_empty() {
+            let files = std::mem::take(&mut self.attach);
+            self.info("uploading…");
+            return self.net.upload(&id, thread.as_deref(), &text, files);
+        }
         let mut p = vec![("channel", id.as_str()), ("text", text.as_str())];
         if let Some(t) = &thread {
             p.push(("thread_ts", t));
@@ -1184,6 +1230,12 @@ impl App {
                 }
             }
             Key::Enter => self.send(),
+            Key::Ctrl('v') => self.paste_image(),
+            Key::Paste(ref t) if self.paste_file(t) => {}
+            Key::Backspace if self.input.text.is_empty() && !self.attach.is_empty() => {
+                self.attach.pop();
+                self.info("attachment removed");
+            }
             Key::Tab => self.complete(),
             Key::PageUp => self.move_sel(-5),
             Key::PageDown => self.move_sel(5),
@@ -1549,7 +1601,9 @@ impl App {
         let pw = w - x0;
 
         // composer + status
-        let prompt = if self.editing.is_some() { "edit› " } else if self.thread.is_some() { "reply› " } else { "› " };
+        let prompt = if self.editing.is_some() { "edit› ".to_string() } else if self.thread.is_some() { "reply› ".to_string() } else { "› ".to_string() };
+        let prompt = if self.attach.is_empty() { prompt } else { format!("[{} img] {}", self.attach.len(), prompt) };
+        let prompt = prompt.as_str();
         let pwid = str_width(prompt);
         let ch = self.input.height(pw.saturating_sub(1), pwid).clamp(1, (h / 3).max(1));
         let y_status = h - 1;
@@ -1867,6 +1921,7 @@ mouse:
   shift+drag   select text (terminal)
 compose:
   Enter        send                Alt-Enter newline
+  C-v          attach clipboard image (or paste an image path)
   Tab          complete @user #chan :emoji:
   ↑ (empty)    edit last message   Esc  normal mode
   C-a C-e C-w C-u C-k  readline-style editing";

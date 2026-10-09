@@ -80,6 +80,7 @@ The interface is modal, like vim. You start in normal mode and browse; `i` opens
 | Compose | |
 |---|---|
 | `Enter` / `Alt-Enter` | send / newline |
+| `Ctrl-V` | attach the clipboard image (needs `wl-paste`, `xclip` or `pngpaste`); pasting an image file path attaches it too. `Backspace` on an empty line removes the last one. Needs the `files:write` scope |
 | `Tab` | complete `@user`, `#channel`, `:emoji:` (press again to cycle) |
 | `Up` on an empty line | edit your last message |
 | `Ctrl-P` `Ctrl-N` | select messages without leaving the composer |
