@@ -10,7 +10,8 @@ use mtui::theme;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const INSTALLED: &str = "/usr/lib/claude-desktop/resources/app.asar";
+const RESOURCES: &str = "/usr/lib/claude-desktop/resources";
+const BACKUP_SUFFIX: &str = ".mtheme-orig";
 const MARK_BEGIN: &str = "/* >>> mtheme claude-app";
 const MARK_END: &str = "/* <<< mtheme claude-app */";
 
@@ -23,7 +24,13 @@ fn asar(args: &[&str]) -> Result<(), String> {
     let spec = std::env::var("MTHEME_ASAR").unwrap_or_else(|_| "npx --yes @electron/asar".into());
     let mut w = spec.split_whitespace();
     let prog = w.next().ok_or("MTHEME_ASAR is empty")?;
-    let st = Command::new(prog).args(w).args(args).status().map_err(|e| format!("{}: {} (is node/npx installed?)", prog, e))?;
+    let mut cmd = Command::new(prog);
+    cmd.args(w).args(args);
+    if args.first() == Some(&"list") {
+        // only the exit status matters here
+        cmd.stdout(std::process::Stdio::null());
+    }
+    let st = cmd.status().map_err(|e| format!("{}: {} (is node/npx installed?)", prog, e))?;
     if st.success() {
         Ok(())
     } else {
@@ -32,6 +39,10 @@ fn asar(args: &[&str]) -> Result<(), String> {
 }
 
 struct Opts {
+    /// The app's `resources` directory: where app.asar lives, and where install writes.
+    target: PathBuf,
+    dry: bool,
+    from_set: bool,
     from: PathBuf,
     dir: PathBuf,
     out: PathBuf,
@@ -41,12 +52,17 @@ struct Opts {
 
 fn parse(args: &[String]) -> Result<Opts, String> {
     let w = work_dir();
-    let mut o = Opts { from: PathBuf::from(INSTALLED), dir: w.join("src"), out: w.join("app.asar"), force: false, theme: None };
+    let mut o = Opts { target: PathBuf::from(RESOURCES), dry: false, from_set: false, from: PathBuf::from(RESOURCES).join("app.asar"), dir: w.join("src"), out: w.join("app.asar"), force: false, theme: None };
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut val = |what: &str| it.next().map(PathBuf::from).ok_or(format!("{} needs a value", what));
         match a.as_str() {
-            "--from" => o.from = val("--from")?,
+            "--from" => {
+                o.from = val("--from")?;
+                o.from_set = true;
+            }
+            "--target" => o.target = val("--target")?,
+            "--dry-run" => o.dry = true,
             "--dir" => o.dir = val("--dir")?,
             "--out" => o.out = val("--out")?,
             "--force" => o.force = true,
@@ -54,7 +70,16 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             other => return Err(format!("unknown option {}", other)),
         }
     }
+    // by default build from the pristine copy, so re-installing never stacks on an installed theme
+    if !o.from_set {
+        let backup = backup_of(&o.target);
+        o.from = if backup.exists() { backup } else { o.target.join("app.asar") };
+    }
     Ok(o)
+}
+
+fn backup_of(target: &Path) -> PathBuf {
+    target.join(format!("app.asar{}", BACKUP_SUFFIX))
 }
 
 /// Unpack the archive (and its `.unpacked` side files) into `dir`.
@@ -206,6 +231,123 @@ fn pack(o: &Opts) -> Result<String, String> {
     Ok(format!("packed {} ({:.1} MB){}", o.out.display(), size as f64 / 1e6, if files.is_empty() { String::new() } else { format!(", {} file{} left unpacked beside it", files.len(), if files.len() == 1 { "" } else { "s" }) }))
 }
 
+// ---- install: back up the app's archive, then replace it ----
+
+/// FNV-1a over a file: enough to tell "the archive we installed" from "one the package manager put there".
+fn fingerprint(p: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(p).map_err(|e| format!("{}: {}", p.display(), e))?;
+    let (mut h, mut buf) = (0xcbf29ce484222325u64, vec![0u8; 1 << 20]);
+    loop {
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        for b in &buf[..n] {
+            h = (h ^ *b as u64).wrapping_mul(0x100000001b3);
+        }
+    }
+    Ok(format!("{:016x}", h))
+}
+
+fn state_file() -> PathBuf {
+    work_dir().join("installed.txt")
+}
+
+fn writable(dir: &Path) -> bool {
+    std::ffi::CString::new(dir.to_string_lossy().as_bytes()).is_ok_and(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 })
+}
+
+/// Run a file operation, through sudo when the directory is not ours to write. Shows what it runs.
+fn run_priv(o: &Opts, args: &[&str]) -> Result<(), String> {
+    let sudo = !writable(&o.target) && unsafe { libc::geteuid() } != 0;
+    println!("  $ {}{}", if sudo { "sudo " } else { "" }, args.join(" "));
+    if o.dry {
+        return Ok(());
+    }
+    let st = if sudo { Command::new("sudo").args(args).status() } else { Command::new(args[0]).args(&args[1..]).status() }.map_err(|e| format!("{}: {}", args[0], e))?;
+    if st.success() {
+        Ok(())
+    } else {
+        Err(format!("{} failed ({})", args.join(" "), st))
+    }
+}
+
+/// Put `src` at `dest` atomically (copy next to it, then rename), so a running app keeps the old file.
+fn replace(o: &Opts, src: &Path, dest: &Path) -> Result<(), String> {
+    let tmp = format!("{}.mtheme-new", dest.display());
+    run_priv(o, &["install", "-m", "644", &src.to_string_lossy(), &tmp])?;
+    run_priv(o, &["mv", "-f", &tmp, &dest.to_string_lossy()])
+}
+
+fn install(o: &Opts) -> Result<String, String> {
+    let live = o.target.join("app.asar");
+    if !live.is_file() {
+        return Err(format!("{} not found (--target DIR is the app's resources directory)", live.display()));
+    }
+    if let Some(t) = &o.theme {
+        println!("{}", run_build(&Opts { theme: Some(t.clone()), ..clone(o) })?);
+    }
+    if !o.out.is_file() {
+        return Err(format!("{} not built yet (mtheme claude install THEME, or build first)", o.out.display()));
+    }
+    // refuse to install something asar cannot read, or whose files outside the archive differ
+    asar(&["list", &o.out.to_string_lossy()]).map_err(|_| format!("{} is not a valid archive", o.out.display()))?;
+    let new_unpacked = unpacked_files(&o.out);
+    for (rel, _) in &new_unpacked {
+        let (a, b) = (o.out.with_extension("asar.unpacked").join(rel), o.target.join("app.asar.unpacked").join(rel));
+        if fingerprint(&a)? != fingerprint(&b)? {
+            return Err(format!("{} differs from the installed copy; rebuild from the installed app (mtheme claude build --force)", rel));
+        }
+    }
+    let ours = std::fs::read_to_string(state_file()).ok().and_then(|t| t.lines().find_map(|l| l.strip_prefix("hash=").map(String::from)));
+    let live_hash = fingerprint(&live)?;
+    let backup = backup_of(&o.target);
+    let mut notes = Vec::new();
+    if ours.as_deref() == Some(live_hash.as_str()) && backup.exists() {
+        notes.push(format!("kept the existing backup {}", backup.display()));
+    } else {
+        // the installed archive is stock (first install, or the package was updated): that is what to keep
+        run_priv(o, &["cp", "-p", &live.to_string_lossy(), &backup.to_string_lossy()])?;
+        notes.push(format!("backed up {} to {}", live.display(), backup.display()));
+    }
+    replace(o, &o.out, &live)?;
+    if !o.dry {
+        let _ = std::fs::create_dir_all(work_dir());
+        let _ = std::fs::write(state_file(), format!("hash={}\ntheme={}\n", fingerprint(&live)?, theme::lookup("claude").map(|i| theme::THEMES[i].id).unwrap_or("?")));
+    }
+    notes.push("restart Claude desktop to see it (a running instance keeps the old file); `mtheme claude restore` puts the original back".into());
+    Ok(if o.dry { format!("dry run, nothing was changed; this would have:\n{}", notes.join("\n")) } else { notes.join("\n") })
+}
+
+fn restore(o: &Opts) -> Result<String, String> {
+    let (live, backup) = (o.target.join("app.asar"), backup_of(&o.target));
+    if !backup.is_file() {
+        return Err(format!("no backup at {}", backup.display()));
+    }
+    replace(o, &backup, &live)?;
+    if !o.dry {
+        let _ = std::fs::remove_file(state_file());
+    }
+    Ok("original archive restored; restart Claude desktop (the backup is kept)".into())
+}
+
+fn status(o: &Opts) -> Result<String, String> {
+    let live = o.target.join("app.asar");
+    let backup = backup_of(&o.target);
+    let ours = std::fs::read_to_string(state_file()).ok();
+    let live_hash = fingerprint(&live).ok();
+    let themed = ours.as_ref().zip(live_hash.as_ref()).is_some_and(|(t, h)| t.contains(&format!("hash={}", h)));
+    let theme_line = ours.as_ref().and_then(|t| t.lines().find_map(|l| l.strip_prefix("theme="))).unwrap_or("?");
+    Ok(format!(
+        "installed archive: {} ({})\nbackup: {}\nworking directory: {}",
+        live.display(),
+        if themed { format!("mtheme build, theme {}", theme_line) } else { "stock (or changed by something else)".into() },
+        if backup.exists() { backup.display().to_string() } else { "none yet".into() },
+        work_dir().display()
+    ))
+}
+
 pub fn run(args: &[String]) -> Result<String, String> {
     let Some(cmd) = args.first() else { return Err(USAGE.into()) };
     let o = parse(&args[1..])?;
@@ -214,29 +356,40 @@ pub fn run(args: &[String]) -> Result<String, String> {
         "apply" => apply(&o),
         "pack" => pack(&o),
         "build" => {
-            let mut msgs = Vec::new();
-            if !o.dir.exists() || o.force {
-                msgs.push(extract(&Opts { force: o.force, ..clone(&o) })?);
-            }
-            msgs.push(apply(&o)?);
-            msgs.push(pack(&o)?);
-            msgs.push(format!("use it by putting {} (and {}.unpacked) in place of resources/app.asar of a copy of the app you can write to", o.out.display(), o.out.display()));
-            Ok(msgs.join("\n"))
+            let mut m = run_build(&o)?;
+            m.push_str(&format!("\ninstall it with `mtheme claude install` (backs up the original first), or put {} in place of resources/app.asar of a copy you own", o.out.display()));
+            Ok(m)
         }
+        "install" => install(&o),
+        "restore" => restore(&o),
+        "status" => status(&o),
         _ => Err(USAGE.into()),
     }
 }
 
+fn run_build(o: &Opts) -> Result<String, String> {
+    let mut msgs = Vec::new();
+    if !o.dir.exists() || o.force {
+        msgs.push(extract(&Opts { force: o.force, ..clone(o) })?);
+    }
+    msgs.push(apply(o)?);
+    msgs.push(pack(o)?);
+    Ok(msgs.join("\n"))
+}
+
 fn clone(o: &Opts) -> Opts {
-    Opts { from: o.from.clone(), dir: o.dir.clone(), out: o.out.clone(), force: o.force, theme: o.theme.clone() }
+    Opts { target: o.target.clone(), dry: o.dry, from_set: o.from_set, from: o.from.clone(), dir: o.dir.clone(), out: o.out.clone(), force: o.force, theme: o.theme.clone() }
 }
 
 pub const USAGE: &str = "usage: mtheme claude extract [--from app.asar] [--dir DIR] [--force]
        mtheme claude apply [THEME] [--dir DIR]       append (or replace) the theme's chunk in the renderer CSS
        mtheme claude pack [--dir DIR] [--out FILE]   build a new app.asar (and FILE.unpacked)
        mtheme claude build THEME                     extract if needed, apply, pack
+       mtheme claude install [THEME] [--dry-run]     back up the app's archive, then replace it with the packed one
+       mtheme claude restore                         put the backup back
+       mtheme claude status
 
-Works in ~/.cache/mtheme/claude/ and never touches the installed app.
+Building works in ~/.cache/mtheme/claude/. install/restore write to the app's resources directory\n(/usr/lib/claude-desktop/resources, or --target DIR) with sudo when it is not yours, atomically,\nand keep the stock archive as app.asar.mtheme-orig (refreshed only when the package itself changed).
 Archives are handled by `npx --yes @electron/asar`; set MTHEME_ASAR to use another command.";
 
 #[cfg(test)]

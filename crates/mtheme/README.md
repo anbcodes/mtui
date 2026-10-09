@@ -73,8 +73,20 @@ mtheme claude pack [--out FILE]           app.asar + app.asar.unpacked
 ```
 
 The packed archive has the same files, modes and unpacked set as the installed one, plus the chunk.
-To run it, put `app.asar` and `app.asar.unpacked` in place of `resources/app.asar*` in a copy of
-`/usr/lib/claude-desktop` that you own; an update of the real app overwrites none of this.
+
+```
+mtheme claude install [THEME] [--dry-run]   back up app.asar, then replace it (builds first when given a THEME)
+mtheme claude restore                       put the original back
+mtheme claude status
+```
+
+`install` writes next to the app (`/usr/lib/claude-desktop/resources`, or `--target DIR`), through `sudo`
+when that directory is not yours; it prints each command it runs. The stock archive is kept as
+`app.asar.mtheme-orig` and is only refreshed when the package itself changed (the installed archive is
+not the one mtheme last installed), so installing again never backs up a themed archive. The new file is
+copied beside the old one and renamed over it, so a running Claude keeps working until you restart it.
+Builds start from the backup when there is one. A package update overwrites the installed archive:
+run `mtheme claude install` again.
 
 Keys in the picker: `j k` row, `h l` previous / next theme, `1`–`5` pick,
 `a` give every target the highlighted row's theme, `I` set up a terminal, `q`.
