@@ -43,6 +43,8 @@ pub struct Screen {
     prev: Vec<Cell>,
     out: Vec<u8>,
     full: bool,
+    /// The theme the cells on the terminal were drawn with.
+    themed: usize,
     images: Vec<Placement>,
     shown: Vec<Placement>,
 }
@@ -158,7 +160,7 @@ pub fn char_width(c: char) -> usize {
 
 impl Screen {
     pub fn new(w: usize, h: usize) -> Self {
-        Screen { w, h, cells: vec![BLANK; w * h], prev: vec![BLANK; w * h], out: Vec::with_capacity(8192), full: true, images: Vec::new(), shown: Vec::new() }
+        Screen { w, h, cells: vec![BLANK; w * h], prev: vec![BLANK; w * h], out: Vec::with_capacity(8192), full: true, themed: theme::current(), images: Vec::new(), shown: Vec::new() }
     }
 
     pub fn resize(&mut self, w: usize, h: usize) {
@@ -298,6 +300,12 @@ impl Screen {
 
     /// Emit the diff to the terminal. `cursor` = (x, y, bar_shape).
     pub fn flush(&mut self, cursor: Option<(usize, usize, bool)>) {
+        // cells hold palette indices; a new theme changes what they look like
+        // without changing the cells, so the usual changed-cells diff would miss it
+        if self.themed != theme::current() {
+            self.themed = theme::current();
+            self.full = true;
+        }
         let out = &mut self.out;
         out.clear();
         out.extend_from_slice(b"\x1b[?25l");
