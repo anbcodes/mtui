@@ -28,8 +28,8 @@ appends the include line for kitty and ghostty; alacritty is shown as a hint.
 Only terminals found on this machine are listed.
 
 **Firefox**: for each install's profile mtheme writes `chrome/mtheme-chrome.css`
-(toolbar, tabs, URL bar, panels, sidebar) and `chrome/mtheme-content.css` (the
-new tab page and other `about:` pages, never websites). `mtheme setup firefox`
+(toolbar, tabs, URL bar, panels, context menus, sidebar) and `chrome/mtheme-content.css` (the
+new tab page, other `about:` pages and DevTools; websites only through the per-site templates below). `mtheme setup firefox`
 (or `I`) adds an `@import` line at the top of `userChrome.css` / `userContent.css`
 and `toolkit.legacyUserProfileCustomizations.stylesheets` to `user.js`, leaving
 the rest of your files alone. Firefox reads these only at startup, so restart it.
