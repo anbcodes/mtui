@@ -14,6 +14,8 @@ const RESOURCES: &str = "/usr/lib/claude-desktop/resources";
 const BACKUP_SUFFIX: &str = ".mtheme-orig";
 const MARK_BEGIN: &str = "/* >>> mtheme claude-app";
 const MARK_END: &str = "/* <<< mtheme claude-app */";
+const JS_BEGIN: &str = "/*mtheme>*/";
+const JS_END: &str = "/*<mtheme*/";
 
 fn work_dir() -> PathBuf {
     let base = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))).unwrap_or_else(|| PathBuf::from("."));
@@ -73,9 +75,23 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     // by default build from the pristine copy, so re-installing never stacks on an installed theme
     if !o.from_set {
         let backup = backup_of(&o.target);
-        o.from = if backup.exists() { backup } else { o.target.join("app.asar") };
+        o.from = if backup.exists() { stage(&backup, &o.target)? } else { o.target.join("app.asar") };
     }
     Ok(o)
+}
+
+/// asar finds an archive's unpacked files at `<archive>.unpacked`, which the backup does not have:
+/// give it a work directory where the backup is called app.asar, next to the real unpacked directory.
+fn stage(backup: &Path, target: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::symlink;
+    let dir = work_dir().join("orig");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    for (name, to) in [("app.asar", backup.to_path_buf()), ("app.asar.unpacked", target.join("app.asar.unpacked"))] {
+        let link = dir.join(name);
+        let _ = std::fs::remove_file(&link);
+        symlink(&to, &link).map_err(|e| format!("{}: {}", link.display(), e))?;
+    }
+    Ok(dir.join("app.asar"))
 }
 
 fn backup_of(target: &Path) -> PathBuf {
@@ -122,6 +138,80 @@ fn stylesheets(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
+fn minify(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(i) = rest.find("/*") {
+        out.push_str(&rest[..i]);
+        rest = rest[i..].find("*/").map(|j| &rest[i + j + 2..]).unwrap_or("");
+    }
+    out.push_str(rest);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The claude.ai view's preload script (`.vite/build/mainView.js`) already calls
+/// `<electron>.webFrame.insertCSS(...)` once on every page load, for scrollbars. This adds one more
+/// such call in front of it, carrying the theme, which is all the patch is:
+///
+///     ...,/*mtheme>*/e.webFrame.insertCSS("<css>"),/*<mtheme*/e.webFrame.insertCSS(`...`)
+///
+/// The anchor is the call's text; `<electron>` is whatever name the bundler gave the import. A
+/// release that changes the anchor (no match, or more than one) is left untouched and reported.
+fn patch_preload(js: &str, css: Option<&str>) -> Result<Option<String>, String> {
+    // drop an earlier patch
+    let mut js = js.to_string();
+    while let (Some(a), Some(b)) = (js.find(JS_BEGIN), js.find(JS_END)) {
+        if b < a {
+            break;
+        }
+        js.replace_range(a..b + JS_END.len(), "");
+    }
+    const ANCHOR: &str = ".webFrame.insertCSS(";
+    match js.matches(ANCHOR).count() {
+        1 => {}
+        0 => return Ok(None),
+        n => return Err(format!("{} insertCSS calls (expected 1); the app changed", n)),
+    }
+    let Some(css) = css else { return Ok(Some(js)) };
+    let at = js.find(ANCHOR).unwrap_or(0);
+    let start = js[..at].rfind(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).map(|i| i + 1).unwrap_or(0);
+    if start == at {
+        return Err("could not read the electron import's name before .webFrame".into());
+    }
+    let call = format!("{}{}{}.insertCSS({}),{}", JS_BEGIN, &js[start..at], ".webFrame", mtui::json::quote(&minify(css)), JS_END);
+    js.insert_str(start, &call);
+    Ok(Some(js))
+}
+
+/// Patch every preload script that has the anchor; each result is checked with `node --check`.
+fn patch_preloads(dir: &Path, css: Option<&str>) -> Result<Vec<String>, String> {
+    let mut done = Vec::new();
+    let build = dir.join(".vite/build");
+    let Ok(rd) = std::fs::read_dir(&build) else { return Ok(done) };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.extension().is_none_or(|x| x != "js") {
+            continue;
+        }
+        let Ok(js) = std::fs::read_to_string(&p) else { continue };
+        if !js.contains(".webFrame.insertCSS(") {
+            continue;
+        }
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let Some(new) = patch_preload(&js, css).map_err(|e| format!("{}: {}", name, e))? else { continue };
+        std::fs::write(&p, &new).map_err(|e| format!("{}: {}", p.display(), e))?;
+        // a syntax slip would stop the app from starting at all: check, and put the file back if it fails
+        if let Ok(out) = Command::new("node").arg("--check").arg(&p).output() {
+            if !out.status.success() {
+                let _ = std::fs::write(&p, &js);
+                return Err(format!("{}: patched file failed node --check: {}", name, String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("")));
+            }
+        }
+        done.push(name);
+    }
+    Ok(done)
+}
+
 fn strip_chunk(css: &str) -> String {
     match (css.find(MARK_BEGIN), css.find(MARK_END)) {
         (Some(a), Some(b)) if b > a => format!("{}{}", &css[..a], css[b + MARK_END.len()..].trim_start_matches('\n')),
@@ -153,7 +243,10 @@ fn apply(o: &Opts) -> Result<String, String> {
     }
     let _ = theme::save("claude", ti);
     let names: Vec<String> = files.iter().map(|f| f.strip_prefix(&o.dir).unwrap_or(f).display().to_string()).collect();
-    Ok(if chunk.is_empty() { format!("removed the mtheme chunk from {}", names.join(", ")) } else { format!("{} chunk added to {}", theme::THEMES[ti].name, names.join(", ")) })
+    let patched = patch_preloads(&o.dir, (!body.is_empty()).then_some(body.as_str()))?;
+    let mut msg = if chunk.is_empty() { format!("removed the mtheme chunk from {}", names.join(", ")) } else { format!("{} chunk added to {}", theme::THEMES[ti].name, names.join(", ")) };
+    msg.push_str(&if patched.is_empty() { "\nwarning: no preload script has the webFrame.insertCSS anchor, so the claude.ai pages themselves are NOT themed (the app changed?)".to_string() } else { format!("\n{} insertCSS patch in {} (this is what themes the claude.ai pages)", if chunk.is_empty() { "removed" } else { "added one" }, patched.join(", ")) });
+    Ok(msg)
 }
 
 /// Files the original keeps outside the archive (native modules, binaries) with their modes.
@@ -395,6 +488,18 @@ Archives are handled by `npx --yes @electron/asar`; set MTHEME_ASAR to use anoth
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preload_patch_is_one_inserted_call_and_is_replaceable() {
+        let js = r#"a.b("x",1),e.webFrame.insertCSS(`::-webkit-scrollbar{width:12px}`),c()"#;
+        let one = patch_preload(js, Some("/* c */ a { b: c }")).unwrap().unwrap();
+        assert_eq!(one, r#"a.b("x",1),/*mtheme>*/e.webFrame.insertCSS("a { b: c }"),/*<mtheme*/e.webFrame.insertCSS(`::-webkit-scrollbar{width:12px}`),c()"#);
+        // applying again replaces rather than stacks, and an empty theme removes it
+        assert_eq!(patch_preload(&one, Some("d{}")).unwrap().unwrap().matches("mtheme>").count(), 1);
+        assert_eq!(patch_preload(&one, None).unwrap().unwrap(), js);
+        assert!(patch_preload("nothing here", Some("a{}")).unwrap().is_none());
+        assert!(patch_preload("x.webFrame.insertCSS(1);y.webFrame.insertCSS(2)", Some("a{}")).is_err());
+    }
 
     #[test]
     fn chunks_are_replaced_not_stacked() {

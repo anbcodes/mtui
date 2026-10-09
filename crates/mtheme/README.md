@@ -57,13 +57,21 @@ itself. The `theme-website` skill (`.claude/skills/`) walks through theming a ne
 `/* <<< mtheme … */` markers so an older chunk can be stripped before appending a new one.
 The built-in `claude-app` template re-colours Claude's UI that way: it replaces the nine
 `--cds-*` colour ramps (everything else, including the light/dark swap, derives from them) and
-the legacy `--bg-*`/`--text-*`/`--accent-*` tokens. It is not applied through Firefox.
+the legacy `--bg-*`/`--text-*`/`--accent-*` tokens, on both the desktop shell and the claude.ai
+site's own selectors. It is applied through Firefox on claude.ai (`mtheme set firefox`).
 
-**Claude desktop** is not driven by mtheme: the app refuses to start when a debugging switch such
-as `--remote-debugging-port` is present, so CSS cannot be injected into it. What works is editing
-its renderer stylesheet and repacking the archive, which `mtheme claude` does in
-`~/.cache/mtheme/claude/` (never in the installed app), shelling out to `npx @electron/asar`
-(`MTHEME_ASAR="npx asar"` to use another command):
+**Claude desktop** cannot be driven from outside: it refuses to start with a debugging switch such
+as `--remote-debugging-port`. What works is changing the files it ships. The app window is the
+claude.ai website, so two things are edited, in `~/.cache/mtheme/claude/` (never in the installed
+app), via `npx @electron/asar` (`MTHEME_ASAR="npx asar"` to use another command):
+
+- the renderer stylesheets of the app's own windows (the chunk above, between markers);
+- one inserted call in the preload script `.vite/build/mainView.js`, which is what themes the
+  claude.ai pages. That preload already calls `<electron>.webFrame.insertCSS(`…`)` once on every page
+  load; the patch puts one more call in front of it (`/*mtheme>*/e.webFrame.insertCSS("…"),/*<mtheme*/`).
+  The anchor is the text `.webFrame.insertCSS(`; if an app release has none or several, nothing is
+  patched and `apply` says so. The patched file is checked with `node --check`, and applying again
+  replaces the patch instead of stacking it.
 
 ```
 mtheme claude build evergarden-winter     extract (once) + apply + pack
