@@ -2,10 +2,12 @@
 //! carry `data-line` source positions), `page` wraps it in a printable page,
 //! and `Server` is a live-reloading preview that an editor can drive.
 
+mod fmt;
 mod md;
 mod page;
 mod serve;
 
+pub use fmt::format_range;
 pub use md::{esc, render, Doc, Heading, Options};
 pub use page::page;
 pub use serve::{open_browser, Server};

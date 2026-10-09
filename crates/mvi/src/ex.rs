@@ -13,7 +13,7 @@ pub const HELP: &str = "\
 mvi — minimal vim-like editor                       (:bd closes this)
 NORMAL  h j k l w b e W B E ge 0 ^ $ gg G { } % f F t T ; , H M L  counts work
         i a I A o O  x X D C s S r~ J gJ  p P  u ^R  .  ~  ^A ^X  * # n N
-        d c y > < gc(comment) gq/gw(format: gwip) gu gU g~ + motion/text-object (iw aw i( a{ i\" ip ...)
+        d c y > < gc(comment) gq/gw(format: gwip; markdown-aware) gu gU g~ + motion/text-object (iw aw i( a{ i\" ip ...)
         v V visual · q{r} record · @{r} play · m{a-z} mark · '{a-z} jump · '' back
         gd goto definition · gf open file · K line diagnostics · ]d [d next/prev diag
         ]e [e next/prev error · ]q [q quickfix · ]b [b buffers · ^^ alt buffer · ^S save

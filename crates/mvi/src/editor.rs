@@ -1127,8 +1127,10 @@ impl Editor {
             (lead, body.trim_end().to_string())
         };
         let old: Vec<String> = self.bb().lines[l1..=l2].to_vec();
-        let mut out: Vec<String> = Vec::new();
-        let mut i = 0;
+        // markdown knows about code, lists, quotes and tables; other text is plain prose
+        let md = self.bb().lang.name == "markdown";
+        let mut out: Vec<String> = if md { mmd::format_range(&self.bb().lines, l1, l2, tw) } else { Vec::new() };
+        let mut i = if md { old.len() } else { 0 };
         while i < old.len() {
             let (lead, body) = split(&old[i]);
             if body.trim().is_empty() {
@@ -2919,6 +2921,18 @@ mod format_tests {
         assert_eq!(c, (0, 0));
         let (_, c) = run("aaa bbb ccc ddd eee", 10, "gqq");
         assert_eq!(c.0, 2);
+    }
+
+    #[test]
+    fn markdown_is_formatted_structurally() {
+        let mut e = Editor::new(80, 24);
+        e.opts.textwidth = 20;
+        e.b().lines = "- one two three four five\n\n```\nlong code line stays as it is\n```".split('\n').map(String::from).collect();
+        e.b().lang = mtui::syntax::by_name("markdown").unwrap();
+        for c in "gwG".chars() {
+            e.handle_key(Key::Char(c));
+        }
+        assert_eq!(e.bb().lines.join("\n"), "- one two three four\n  five\n\n```\nlong code line stays as it is\n```");
     }
 
     #[test]
