@@ -487,6 +487,12 @@ fn firefox_chrome_css(t: &ThemeDef) -> String {
   --urlbar-box-active-bgcolor: {s2} !important;
   --urlbar-box-text-color: {text} !important;
   --urlbar-popup-url-color: {blue} !important;
+  --autocomplete-popup-background: {mantle} !important;
+  --autocomplete-popup-color: {text} !important;
+  --autocomplete-popup-border-color: {s1} !important;
+  --autocomplete-popup-highlight-background: {s1} !important;
+  --autocomplete-popup-highlight-color: {text} !important;
+  --autocomplete-popup-hover-background: {s0} !important;
   --toolbarbutton-icon-fill: {text} !important;
   --toolbarbutton-icon-fill-attention: {blue} !important;
   --toolbarbutton-hover-background: {s1} !important;
@@ -531,6 +537,10 @@ toolbarbutton:hover > .toolbarbutton-icon, .toolbarbutton-1:hover > .toolbarbutt
 #urlbar-input::selection {{ background: {blue} !important; color: {on_blue} !important; }}
 #urlbar .urlbar-icon, #identity-icon, #tracking-protection-icon, #page-action-buttons .urlbar-icon {{ fill: {text} !important; color: {text} !important; }}
 #identity-box, #identity-icon-label, #tracking-protection-icon-box, .urlbar-page-action {{ color: {text} !important; }}
+/* the "Not secure" / permission pill left of the address (white with our light text otherwise) */
+#identity-box #identity-icon-box, #identity-box[pageproxystate] #identity-icon-box, #identity-box.notSecureText #identity-icon-box, #identity-box.chromeUI #identity-icon-box, #identity-permission-box, #tracking-protection-icon-container {{ background-color: {s2} !important; background-image: none !important; color: {text} !important; border-radius: 6px !important; }}
+#identity-box:hover #identity-icon-box, #identity-box:hover #identity-permission-box {{ background-color: {s1} !important; }}
+#identity-icon-label, #identity-icon-box .identity-icon-label, #identity-box .identity-label {{ color: {text} !important; }}
 #urlbar-label-box, #urlbar-search-mode-indicator {{ background: {s2} !important; color: {text} !important; }}
 .urlbarView {{ background: {mantle} !important; color: {text} !important; }}
 .urlbarView-row[selected], .urlbarView-row:hover {{ background: {s1} !important; color: {text} !important; }}
@@ -559,6 +569,14 @@ findbar textbox, .findbar-textbox {{ background: {s0} !important; color: {text} 
 #browser, #appcontent, #tabbrowser-tabpanels, #tabbrowser-tabbox {{ background: {base} !important; }}
 tooltip {{ background: {mantle} !important; color: {text} !important; border-color: {s1} !important; }}
 .badged-button .toolbarbutton-badge {{ background-color: {red} !important; }}
+/* form autofill / password suggestions under a text field */
+#PopupAutoComplete, #PopupAutoComplete[type="autocomplete-richlistbox"], .autocomplete-richlistbox, panel[type="autocomplete-richlistbox"] {{ background: {mantle} !important; color: {text} !important; border: 1px solid {s1} !important; border-radius: 6px !important; }}
+richlistbox.autocomplete-richlistbox, .autocomplete-richlistbox {{ background: {mantle} !important; color: {text} !important; appearance: none !important; }}
+richlistitem.autocomplete-richlistitem, .autocomplete-richlistitem, richlistitem[is="autocomplete-richlistitem"] {{ background: transparent !important; color: {text} !important; border: none !important; border-radius: 4px !important; }}
+richlistitem.autocomplete-richlistitem[selected], richlistitem.autocomplete-richlistitem:hover, richlistitem[is="autocomplete-richlistitem"][selected] {{ background: {s1} !important; color: {text} !important; }}
+.ac-title, .ac-title-text, .ac-comment, .ac-separator, .ac-url-text, .ac-site-icon, .ac-label, .ac-text-overflow-container {{ color: inherit !important; }}
+.ac-comment, .ac-extra {{ color: {sub} !important; }}
+.ac-emphasis {{ color: {text} !important; font-weight: bold !important; }}
 notification, .notificationbox-stack, .infobar, notification-message {{ --info-bar-background: {s1}; background: {s1} !important; color: {text} !important; border-color: {s2} !important; }}
 notification .notification-button, .infobar button {{ background: {s2} !important; color: {text} !important; }}
 "#
