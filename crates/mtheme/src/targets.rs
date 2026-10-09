@@ -231,23 +231,32 @@ fn waybar_css(t: &ThemeDef) -> String {
     let Some(p) = &t.pal else { return s };
     let c = |x: u32| rgb_of(x);
     let h = |x: u32| hex(rgb_of(x));
+    let light = theme::luminance(c(p.base)) > 0.4;
     // text that reads on a coloured button
-    let ink = |bg: u32| hex(theme::legible(if theme::luminance(c(p.base)) > 0.4 { c(p.text) } else { c(p.base) }, c(bg)));
+    let ink = |bg: u32| hex(theme::legible(if light { c(p.text) } else { c(p.base) }, c(bg)));
+    // an accent as text on the pill background
+    let on_pill = |fg: u32| hex(theme::legible(c(fg), c(p.surface0)));
     s.push_str(&format!(
         "window#waybar {{ background: {mantle}; color: {text}; }}\n\
-         .ws {{ border: 1px solid {s1}; background: {s0}; color: {sub}; }}\n\
-         .ws.empty {{ border-color: {mantle}; background: {mantle}; color: {o0}; }}\n\
-         .ws.visible {{ border-color: {s2}; background: {s2}; color: {text}; }}\n\
-         .ws.focused {{ border-color: {blue}; background: {blue}; color: {on_blue}; }}\n\
-         .ws.urgent {{ border-color: {red}; background: {red}; color: {on_red}; }}\n\
-         #mode {{ border: 1px solid {red}; background: {red}; color: {on_red}; }}\n\
-         #custom-i3status, #pulseaudio, #backlight, #clock, #battery, #network, #cpu, #memory, #tray {{ color: {text}; }}\n\
-         #pulseaudio, #backlight {{ border-right: 1px solid {s2}; }}\n\
+         .ws {{ background: {s0}; color: {sub}; }}\n\
+         .ws.empty {{ background: transparent; color: {o1}; }}\n\
+         .ws.visible {{ background: {s2}; color: {text}; }}\n\
+         .ws.focused {{ background: {blue}; color: {on_blue}; box-shadow: none; }}\n\
+         .ws.urgent {{ background: {red}; color: {on_red}; }}\n\
+         #mode {{ background: {red}; color: {on_red}; }}\n\
+         #pulseaudio, #backlight, #network, #cpu, #memory, #disk, #battery, #clock {{ background: {s0}; color: {text}; }}\n\
+         #pulseaudio.muted {{ color: {o1}; }}\n\
+         #network.disconnected {{ color: {red_t}; }}\n\
+         #battery.charging, #battery.plugged {{ color: {green_t}; }}\n\
+         #battery.warning:not(.charging) {{ color: {yellow_t}; }}\n\
+         #battery.critical:not(.charging) {{ background: {red}; color: {on_red}; }}\n\
          #workspaces button {{ color: {sub}; background: transparent; }}\n\
          #workspaces button.focused, #workspaces button.active {{ color: {on_blue}; background: {blue}; }}\n\
          #workspaces button.urgent {{ color: {on_red}; background: {red}; }}\n\
-         tooltip {{ background: {mantle}; color: {text}; border: 1px solid {s1}; }}\n",
-        mantle = h(p.mantle), text = h(p.text), s0 = h(p.surface0), s1 = h(p.surface1), s2 = h(p.surface2), sub = h(p.subtext0), o0 = h(p.overlay0), blue = h(p.blue), red = h(p.red), on_blue = ink(p.blue), on_red = ink(p.red)
+         tooltip {{ background: {s0}; color: {text}; border: 1px solid {s1}; }}\n\
+         tooltip label {{ color: {text}; }}\n",
+        mantle = h(p.mantle), text = h(p.text), s0 = h(p.surface0), s1 = h(p.surface1), s2 = h(p.surface2), sub = h(p.subtext0), o1 = h(p.overlay1), blue = h(p.blue), red = h(p.red),
+        on_blue = ink(p.blue), on_red = ink(p.red), red_t = on_pill(p.red), green_t = on_pill(p.green), yellow_t = on_pill(p.yellow)
     ));
     s
 }
@@ -622,7 +631,7 @@ mod tests {
         assert!(!kitty_conf(&theme::THEMES[0]).contains("color0"));
         assert!(rofi_rasi(t).contains("bg: #1e2528") && rofi_rasi(&theme::THEMES[0]).lines().count() == 1);
         let wb = waybar_css(t);
-        assert!(wb.contains("window#waybar { background: #191e21") && wb.contains(".ws.focused { border-color: #b2caed; background: #b2caed;"));
+        assert!(wb.contains("window#waybar { background: #191e21") && wb.contains(".ws.focused { background: #b2caed;"));
         // light theme: text on the blue button must still read
         let sm = waybar_css(&theme::THEMES[4]);
         let line = sm.lines().find(|l| l.starts_with(".ws.focused")).unwrap();
