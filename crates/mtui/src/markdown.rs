@@ -49,7 +49,7 @@ const S: u8 = 4;
 const C: u8 = 8;
 const L: u8 = 16;
 
-const FG_DIM: u8 = 242;
+const FG_DIM: u8 = 246;
 const BG_CODE: u8 = 235;
 
 fn style(f: u8) -> Style {

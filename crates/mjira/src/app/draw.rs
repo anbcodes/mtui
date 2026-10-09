@@ -7,7 +7,7 @@ use mtui::sidebar::Row;
 use mtui::wrap::{str_width, wrap};
 use std::collections::HashMap;
 
-const FG_DIM: u8 = 242;
+const FG_DIM: u8 = 246;
 const BG_BAR: u8 = 236;
 const BG_SEL: u8 = 237;
 const ACCENT: u8 = 180;

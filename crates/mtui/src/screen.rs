@@ -46,6 +46,77 @@ pub struct Screen {
     shown: Vec<Placement>,
 }
 
+/// sRGB of an xterm-256 palette index.
+fn rgb(i: u8) -> (f32, f32, f32) {
+    const BASE: [(u8, u8, u8); 16] = [(0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 0, 205), (0, 205, 205), (229, 229, 229), (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0), (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255)];
+    const LV: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let (r, g, b) = match i {
+        0..=15 => BASE[i as usize],
+        16..=231 => {
+            let n = (i - 16) as usize;
+            (LV[n / 36], LV[n / 6 % 6], LV[n % 6])
+        }
+        _ => {
+            let v = 8 + 10 * (i - 232);
+            (v, v, v)
+        }
+    };
+    (r as f32, g as f32, b as f32)
+}
+
+fn lum(i: u8) -> f32 {
+    let (r, g, b) = rgb(i);
+    let f = |c: f32| {
+        let c = c / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+}
+
+/// WCAG contrast ratio of two palette colours.
+pub fn contrast(a: u8, b: u8) -> f32 {
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// `fg` if it reads on `bg` (4.5:1), else the nearest colour of the same hue
+/// that does: lighter on a dark background, darker on a light one.
+pub fn legible(fg: u8, bg: u8) -> u8 {
+    const WANT: f32 = 4.5;
+    if contrast(fg, bg) >= WANT {
+        return fg;
+    }
+    let lighten = contrast(bg, 231) > contrast(bg, 16);
+    if (16..=231).contains(&fg) {
+        let n = (fg - 16) as i32;
+        let (r, g, b) = (n / 36, n / 6 % 6, n % 6);
+        for k in 1..=5 {
+            let step = |l: i32| if lighten { (l + k).min(5) } else { (l - k).max(0) };
+            let c = (16 + 36 * step(r) + 6 * step(g) + step(b)) as u8;
+            if contrast(c, bg) >= WANT {
+                return c;
+            }
+        }
+    } else {
+        let g = if fg >= 232 { fg as i32 } else if lighten { 232 } else { 255 };
+        for k in 0..24 {
+            let c = (if lighten { g + k } else { g - k }).clamp(232, 255) as u8;
+            if contrast(c, bg) >= WANT {
+                return c;
+            }
+        }
+    }
+    if lighten {
+        231
+    } else {
+        16
+    }
+}
+
 pub fn char_width(c: char) -> usize {
     let u = c as u32;
     if u < 0x1100 {
@@ -169,7 +240,10 @@ impl Screen {
         }
     }
 
-    fn sgr(out: &mut Vec<u8>, st: Style) {
+    fn sgr(out: &mut Vec<u8>, mut st: Style) {
+        if st.fg != 0 && st.bg != 0 {
+            st.fg = legible(st.fg, st.bg);
+        }
         out.extend_from_slice(b"\x1b[0");
         if st.attr & BOLD != 0 {
             out.extend_from_slice(b";1");
@@ -270,5 +344,20 @@ impl Screen {
         let mut so = std::io::stdout().lock();
         let _ = so.write_all(s);
         let _ = so.flush();
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::*;
+
+    #[test]
+    fn dim_text_on_bars_is_lifted_but_good_pairs_are_not() {
+        assert_eq!(legible(255, 236), 255);
+        assert_eq!(legible(16, 110), 16);
+        assert!(contrast(legible(242, 236), 236) >= 4.5);
+        assert!(contrast(legible(75, 24), 24) >= 4.5);
+        assert!(contrast(legible(240, 237), 237) >= 4.5);
+        assert!(contrast(legible(250, 255), 255) >= 4.5);
     }
 }

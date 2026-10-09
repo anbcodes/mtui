@@ -5,7 +5,7 @@ use crate::editor::{disp_col, Editor, Mode, TK};
 use mtui::screen::{char_width, Style, BOLD, ITALIC, UNDERLINE};
 use crate::syntax as sx;
 
-const FG_DIM: u8 = 242;
+const FG_DIM: u8 = 246;
 const BG_CURLINE: u8 = 235;
 const BG_SEL: u8 = 238;
 const BG_SEARCH: u8 = 58;
@@ -96,7 +96,7 @@ impl Editor {
         for row in 0..th {
             let ln = top + row;
             if ln >= b.lines.len() {
-                self.screen.put(0, row, '~', Style::fg(239));
+                self.screen.put(0, row, '~', Style::fg(241));
                 continue;
             }
             // gutter
@@ -107,7 +107,7 @@ impl Editor {
             if self.opts.number || self.opts.relnum {
                 let n = if self.opts.relnum && ln != cy { (ln as isize - cy as isize).unsigned_abs() } else { ln + 1 };
                 let s = format!("{:>width$} ", n, width = gw - 2);
-                let st = if ln == cy { Style::new(250, 0, BOLD) } else { Style::fg(239) };
+                let st = if ln == cy { Style::new(250, 0, BOLD) } else { Style::fg(243) };
                 self.screen.puts(1, row, &s, st, gw);
             }
             // text

@@ -106,7 +106,7 @@ impl Editor {
         let name = self.bb().name.clone();
         self.screen.puts(x + 1, y, &format!("{}   q close · Enter go to source · j k C-d C-u g G", name), bar, w);
         let s = format!("{}% ", pct);
-        self.screen.puts(w.saturating_sub(s.len()), y, &s, Style::new(242, 236, 0), w);
+        self.screen.puts(w.saturating_sub(s.len()), y, &s, Style::new(246, 236, 0), w);
         None
     }
 }

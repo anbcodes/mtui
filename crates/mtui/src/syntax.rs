@@ -576,7 +576,7 @@ pub fn style(k: u8) -> crate::screen::Style {
         FUNC => Style::fg(75),
         STRING => Style::fg(114),
         NUMBER => Style::fg(173),
-        COMMENT => Style::new(244, 0, ITALIC),
+        COMMENT => Style::new(245, 0, ITALIC),
         MACRO => Style::fg(73),
         HEADING => Style::new(75, 0, BOLD),
         _ => Style::default(),

@@ -5,7 +5,7 @@ use crate::fuzzy;
 use crate::screen::{Screen, Style, BOLD};
 use crate::term::{Key, Mouse, MouseKind};
 
-pub const FG_DIM: u8 = 242;
+pub const FG_DIM: u8 = 246;
 pub const BG_STATUS: u8 = 236;
 pub const BG_LIST: u8 = 234;
 pub const BG_SEL: u8 = 24;
