@@ -12,6 +12,8 @@ pub enum Kind {
     Ghostty,
     Alacritty,
     Firefox,
+    Waybar,
+    Rofi,
 }
 
 #[derive(Clone)]
@@ -50,6 +52,12 @@ pub fn all() -> Vec<Target> {
     if detected("alacritty", "alacritty") {
         v.push(Target { key: "alacritty", kind: Kind::Alacritty });
     }
+    if on_path("waybar") || waybar_style().is_some() {
+        v.push(Target { key: "waybar", kind: Kind::Waybar });
+    }
+    if on_path("rofi") || config_dir().join("rofi").is_dir() {
+        v.push(Target { key: "rofi", kind: Kind::Rofi });
+    }
     if !firefox_profiles().is_empty() {
         v.push(Target { key: "firefox", kind: Kind::Firefox });
     }
@@ -62,6 +70,8 @@ pub fn find(key: &str) -> Option<Target> {
         "ghostty" => Some(Target { key: "ghostty", kind: Kind::Ghostty }),
         "alacritty" => Some(Target { key: "alacritty", kind: Kind::Alacritty }),
         "firefox" => Some(Target { key: "firefox", kind: Kind::Firefox }),
+        "waybar" => Some(Target { key: "waybar", kind: Kind::Waybar }),
+        "rofi" => Some(Target { key: "rofi", kind: Kind::Rofi }),
         _ => None,
     })
 }
@@ -133,6 +143,115 @@ fn alacritty_conf(t: &ThemeDef) -> String {
     s
 }
 
+// ---- Waybar (the bar under sway): a stylesheet imported last by the user's own ----
+
+/// The `-s` stylesheet of the running waybar, else ~/.config/waybar/style.css.
+fn waybar_running_style() -> Option<PathBuf> {
+    for e in std::fs::read_dir("/proc").ok()?.flatten() {
+        let name = e.file_name();
+        if !name.to_string_lossy().bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(comm) = std::fs::read_to_string(e.path().join("comm")) else { continue };
+        if comm.trim() != "waybar" {
+            continue;
+        }
+        let Ok(raw) = std::fs::read(e.path().join("cmdline")) else { continue };
+        let args: Vec<String> = raw.split(|&b| b == 0).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+        if let Some(i) = args.iter().position(|a| a == "-s" || a == "--style") {
+            if let Some(p) = args.get(i + 1) {
+                return Some(PathBuf::from(p));
+            }
+        }
+    }
+    None
+}
+
+/// The stylesheet to add our `@import` to. A generated one (under /run, as
+/// bars that build their CSS at startup have) is followed to the last file it
+/// imports, which is the one that lives in the user's config.
+pub fn waybar_style() -> Option<PathBuf> {
+    let mut p = std::env::var_os("MTHEME_WAYBAR_STYLE").map(PathBuf::from).or_else(waybar_running_style).or_else(|| Some(config_dir().join("waybar/style.css")).filter(|p| p.is_file()))?;
+    for _ in 0..4 {
+        if !p.starts_with("/run") && !p.starts_with("/tmp") {
+            return Some(p);
+        }
+        let text = std::fs::read_to_string(&p).ok()?;
+        let next = text.lines().filter_map(|l| l.trim().strip_prefix("@import")).filter_map(|r| r.split('"').nth(1).or_else(|| r.split('\'').nth(1)).map(|s| s.trim_start_matches("file://").to_string())).filter(|s| s.starts_with('/') && !s.ends_with("mtui/waybar.css")).last()?;
+        p = PathBuf::from(next);
+    }
+    None
+}
+
+fn rofi_file() -> PathBuf {
+    config_dir().join("rofi/mtheme.rasi")
+}
+
+fn rofi_rasi(t: &ThemeDef) -> String {
+    let mut s = format!("/* {} — written by mtheme */\n", t.name);
+    let Some(p) = &t.pal else { return s };
+    let h = |x: u32| hex(rgb_of(x));
+    let light = theme::luminance(rgb_of(p.base)) > 0.4;
+    let ink = |bg: u32| hex(theme::legible(if light { rgb_of(p.text) } else { rgb_of(p.base) }, rgb_of(bg)));
+    s.push_str(&format!(
+        "* {{\n    bg: {base}; bg-alt: {s0}; bg-sel: {s1}; fg: {text}; dim: {o1}; accent: {blue}; on-accent: {on_blue}; red: {red}; on-red: {on_red}; green: {green};\n    background-color: transparent; text-color: @fg; border-color: @accent;\n}}\n\
+         window {{ background-color: @bg; border: 2px; border-color: @accent; border-radius: 0; padding: 0; }}\n\
+         mainbox {{ background-color: transparent; border: 0; padding: 0; spacing: 0; }}\n\
+         inputbar {{ background-color: @bg-alt; padding: 8px 12px; spacing: 8px; border: 0; children: [ prompt, textbox-prompt-colon, entry, case-indicator ]; }}\n\
+         prompt {{ text-color: @accent; background-color: transparent; }}\n\
+         textbox-prompt-colon {{ expand: false; str: \":\"; text-color: @dim; background-color: transparent; }}\n\
+         entry {{ text-color: @fg; placeholder-color: @dim; background-color: transparent; }}\n\
+         case-indicator {{ text-color: @dim; background-color: transparent; }}\n\
+         message {{ background-color: @bg-alt; padding: 6px 12px; border: 0; }}\n\
+         textbox {{ text-color: @fg; background-color: transparent; }}\n\
+         listview {{ background-color: transparent; border: 0; padding: 4px 0; scrollbar: false; spacing: 0; }}\n\
+         element {{ background-color: transparent; text-color: @fg; padding: 6px 12px; border: 0; }}\n\
+         element-text, element-icon {{ background-color: transparent; text-color: inherit; }}\n\
+         element normal.normal, element alternate.normal {{ background-color: transparent; text-color: @fg; }}\n\
+         element normal.urgent, element alternate.urgent {{ background-color: transparent; text-color: @red; }}\n\
+         element normal.active, element alternate.active {{ background-color: transparent; text-color: @green; }}\n\
+         element selected.normal {{ background-color: @accent; text-color: @on-accent; }}\n\
+         element selected.urgent {{ background-color: @red; text-color: @on-red; }}\n\
+         element selected.active {{ background-color: @accent; text-color: @on-accent; }}\n\
+         scrollbar {{ handle-color: @dim; handle-width: 4px; background-color: transparent; }}\n\
+         mode-switcher {{ background-color: @bg-alt; }}\n\
+         button {{ background-color: transparent; text-color: @dim; padding: 6px 12px; }}\n\
+         button selected {{ background-color: @bg-sel; text-color: @fg; }}\n",
+        base = h(p.base), s0 = h(p.surface0), s1 = h(p.surface1), text = h(p.text), o1 = h(p.overlay1), blue = h(p.blue), red = h(p.red), green = h(p.green), on_blue = ink(p.blue), on_red = ink(p.red)
+    ));
+    s
+}
+
+fn waybar_file() -> PathBuf {
+    theme::config_path().with_file_name("waybar.css")
+}
+
+fn waybar_css(t: &ThemeDef) -> String {
+    let mut s = format!("/* {} — written by mtheme; imported last by your waybar stylesheet */\n", t.name);
+    let Some(p) = &t.pal else { return s };
+    let c = |x: u32| rgb_of(x);
+    let h = |x: u32| hex(rgb_of(x));
+    // text that reads on a coloured button
+    let ink = |bg: u32| hex(theme::legible(if theme::luminance(c(p.base)) > 0.4 { c(p.text) } else { c(p.base) }, c(bg)));
+    s.push_str(&format!(
+        "window#waybar {{ background: {mantle}; color: {text}; }}\n\
+         .ws {{ border: 1px solid {s1}; background: {s0}; color: {sub}; }}\n\
+         .ws.empty {{ border-color: {mantle}; background: {mantle}; color: {o0}; }}\n\
+         .ws.visible {{ border-color: {s2}; background: {s2}; color: {text}; }}\n\
+         .ws.focused {{ border-color: {blue}; background: {blue}; color: {on_blue}; }}\n\
+         .ws.urgent {{ border-color: {red}; background: {red}; color: {on_red}; }}\n\
+         #mode {{ border: 1px solid {red}; background: {red}; color: {on_red}; }}\n\
+         #custom-i3status, #pulseaudio, #backlight, #clock, #battery, #network, #cpu, #memory, #tray {{ color: {text}; }}\n\
+         #pulseaudio, #backlight {{ border-right: 1px solid {s2}; }}\n\
+         #workspaces button {{ color: {sub}; background: transparent; }}\n\
+         #workspaces button.focused, #workspaces button.active {{ color: {on_blue}; background: {blue}; }}\n\
+         #workspaces button.urgent {{ color: {on_red}; background: {red}; }}\n\
+         tooltip {{ background: {mantle}; color: {text}; border: 1px solid {s1}; }}\n",
+        mantle = h(p.mantle), text = h(p.text), s0 = h(p.surface0), s1 = h(p.surface1), s2 = h(p.surface2), sub = h(p.subtext0), o0 = h(p.overlay0), blue = h(p.blue), red = h(p.red), on_blue = ink(p.blue), on_red = ink(p.red)
+    ));
+    s
+}
+
 // ---- Firefox: userChrome.css / userContent.css in each install's profile ----
 
 fn firefox_roots() -> Vec<PathBuf> {
@@ -185,9 +304,111 @@ fn firefox_chrome_css(t: &ThemeDef) -> String {
     let mut s = format!("/* {} — written by mtheme */\n", t.name);
     let Some(p) = &t.pal else { return s };
     let c = |x: u32| hex(rgb_of(x));
-    let (base, mantle, crust, s0, s1, s2, text, sub, blue) = (c(p.base), c(p.mantle), c(p.crust), c(p.surface0), c(p.surface1), c(p.surface2), c(p.text), c(p.subtext0), c(p.blue));
+    let light = theme::luminance(rgb_of(p.base)) > 0.4;
+    let ink = |bg: u32| hex(theme::legible(if light { rgb_of(p.text) } else { rgb_of(p.base) }, rgb_of(bg)));
+    let (base, mantle, crust, s0, s1, s2, text, sub, o1, blue, red) = (c(p.base), c(p.mantle), c(p.crust), c(p.surface0), c(p.surface1), c(p.surface2), c(p.text), c(p.subtext0), c(p.overlay1), c(p.blue), c(p.red));
+    let (on_blue, scheme) = (ink(p.blue), if light { "light" } else { "dark" });
     s.push_str(&format!(
-        ":root {{\n  --lwt-accent-color: {mantle} !important;\n  --lwt-text-color: {text} !important;\n  --toolbar-bgcolor: {base} !important;\n  --toolbar-color: {text} !important;\n  --toolbar-field-background-color: {s0} !important;\n  --toolbar-field-color: {text} !important;\n  --toolbar-field-border-color: {s1} !important;\n  --toolbar-field-focus-background-color: {s1} !important;\n  --toolbar-field-focus-color: {text} !important;\n  --toolbar-field-focus-border-color: {blue} !important;\n  --tab-selected-bgcolor: {base} !important;\n  --tab-selected-textcolor: {text} !important;\n  --tab-loading-fill: {blue} !important;\n  --arrowpanel-background: {mantle} !important;\n  --arrowpanel-color: {text} !important;\n  --arrowpanel-border-color: {s1} !important;\n  --arrowpanel-dimmed: {s0} !important;\n  --sidebar-background-color: {mantle} !important;\n  --sidebar-text-color: {text} !important;\n  --sidebar-border-color: {s1} !important;\n  --urlbar-box-bgcolor: {s0} !important;\n  --urlbar-box-hover-bgcolor: {s1} !important;\n  --urlbar-box-active-bgcolor: {s2} !important;\n  --urlbar-box-text-color: {text} !important;\n  --toolbarbutton-icon-fill: {text} !important;\n  --toolbarbutton-hover-background: {s1} !important;\n  --toolbarbutton-active-background: {s2} !important;\n  --focus-outline-color: {blue} !important;\n  --button-primary-bgcolor: {blue} !important;\n  --button-primary-color: {base} !important;\n  --chrome-content-separator-color: {crust} !important;\n  --lwt-tab-line-color: {blue} !important;\n  --inactive-titlebar-opacity: 1 !important;\n}}\n#navigator-toolbox {{ background: {mantle} !important; border-color: {crust} !important; }}\n.tab-label:not([selected]) {{ color: {sub} !important; }}\n"
+        r#":root {{
+  color-scheme: {scheme} !important;
+  --lwt-accent-color: {mantle} !important;
+  --lwt-text-color: {text} !important;
+  --lwt-toolbar-field-background-color: {s0} !important;
+  --lwt-toolbar-field-color: {text} !important;
+  --toolbar-bgcolor: {base} !important;
+  --toolbar-color: {text} !important;
+  --toolbar-field-background-color: {s0} !important;
+  --toolbar-field-color: {text} !important;
+  --toolbar-field-border-color: {s1} !important;
+  --toolbar-field-focus-background-color: {s1} !important;
+  --toolbar-field-focus-color: {text} !important;
+  --toolbar-field-focus-border-color: {blue} !important;
+  --tab-selected-bgcolor: {base} !important;
+  --tab-selected-textcolor: {text} !important;
+  --tab-loading-fill: {blue} !important;
+  --arrowpanel-background: {mantle} !important;
+  --arrowpanel-color: {text} !important;
+  --arrowpanel-border-color: {s1} !important;
+  --arrowpanel-dimmed: {s0} !important;
+  --panel-background: {mantle} !important;
+  --panel-color: {text} !important;
+  --panel-border-color: {s1} !important;
+  --panel-description-color: {sub} !important;
+  --sidebar-background-color: {mantle} !important;
+  --sidebar-text-color: {text} !important;
+  --sidebar-border-color: {s1} !important;
+  --urlbar-box-bgcolor: {s0} !important;
+  --urlbar-box-hover-bgcolor: {s1} !important;
+  --urlbar-box-active-bgcolor: {s2} !important;
+  --urlbar-box-text-color: {text} !important;
+  --urlbar-popup-url-color: {blue} !important;
+  --toolbarbutton-icon-fill: {text} !important;
+  --toolbarbutton-icon-fill-attention: {blue} !important;
+  --toolbarbutton-hover-background: {s1} !important;
+  --toolbarbutton-active-background: {s2} !important;
+  --toolbarbutton-hover-bordercolor: transparent !important;
+  --focus-outline-color: {blue} !important;
+  --button-primary-bgcolor: {blue} !important;
+  --button-primary-color: {on_blue} !important;
+  --chrome-content-separator-color: {crust} !important;
+  --lwt-tab-line-color: {blue} !important;
+  --inactive-titlebar-opacity: 1 !important;
+  --in-content-page-background: {base} !important;
+  --in-content-page-color: {text} !important;
+}}
+
+/* frame, tab strip, toolbars */
+#navigator-toolbox, #titlebar, #TabsToolbar, #toolbar-menubar {{ background: {mantle} !important; color: {text} !important; border-color: {crust} !important; }}
+#nav-bar, #PersonalToolbar {{ background: {base} !important; color: {text} !important; border-color: {s1} !important; }}
+#nav-bar toolbarbutton, #PersonalToolbar toolbarbutton, #TabsToolbar toolbarbutton, #nav-bar .toolbarbutton-1 {{ color: {text} !important; fill: {text} !important; }}
+toolbarbutton:hover > .toolbarbutton-icon, .toolbarbutton-1:hover > .toolbarbutton-icon {{ background-color: {s1} !important; }}
+.bookmark-item, .bookmark-item > .toolbarbutton-text, #PersonalToolbar .toolbarbutton-text {{ color: {text} !important; }}
+#PersonalToolbar #import-button, #PersonalToolbar .chromeclass-toolbar-additional {{ color: {text} !important; }}
+#personal-bookmarks, #PlacesToolbarItems {{ color: {text} !important; }}
+
+/* tabs */
+.tabbrowser-tab .tab-background {{ background-color: transparent !important; border-radius: 6px; }}
+.tabbrowser-tab:hover:not([selected]) .tab-background {{ background-color: {s0} !important; }}
+.tabbrowser-tab[selected] .tab-background, .tab-background[selected] {{ background: {base} !important; background-color: {base} !important; box-shadow: none !important; border: 1px solid {s1} !important; }}
+.tabbrowser-tab .tab-label {{ color: {sub} !important; }}
+.tabbrowser-tab[selected] .tab-label {{ color: {text} !important; }}
+.tab-icon-image, .tab-close-button {{ fill: {text} !important; color: {text} !important; }}
+.tab-close-button:hover {{ background-color: {s2} !important; }}
+#tabbrowser-arrowscrollbox ~ toolbarbutton, #new-tab-button {{ color: {text} !important; fill: {text} !important; }}
+
+/* URL bar */
+#urlbar, #searchbar {{ color: {text} !important; }}
+#urlbar-background, #searchbar {{ background: {s0} !important; background-color: {s0} !important; border: 1px solid {s1} !important; box-shadow: none !important; }}
+#urlbar:hover #urlbar-background {{ background: {s1} !important; }}
+#urlbar[focused] #urlbar-background, #urlbar[open] #urlbar-background {{ background: {s1} !important; border-color: {blue} !important; }}
+#urlbar-input, .urlbar-input, #urlbar-input::placeholder, .urlbar-input::placeholder {{ color: {text} !important; -moz-context-properties: fill !important; opacity: 1 !important; }}
+#urlbar-input::placeholder, .urlbar-input::placeholder {{ color: {o1} !important; }}
+#urlbar-input::selection {{ background: {blue} !important; color: {on_blue} !important; }}
+#urlbar .urlbar-icon, #identity-icon, #tracking-protection-icon, #page-action-buttons .urlbar-icon {{ fill: {text} !important; color: {text} !important; }}
+#identity-box, #identity-icon-label, #tracking-protection-icon-box, .urlbar-page-action {{ color: {text} !important; }}
+#urlbar-label-box, #urlbar-search-mode-indicator {{ background: {s2} !important; color: {text} !important; }}
+.urlbarView {{ background: {mantle} !important; color: {text} !important; }}
+.urlbarView-row[selected], .urlbarView-row:hover {{ background: {s1} !important; color: {text} !important; }}
+.urlbarView-title, .urlbarView-no-wrap, .urlbarView-action {{ color: {text} !important; }}
+.urlbarView-url, .urlbarView-title-separator::before {{ color: {blue} !important; }}
+.urlbarView-row[selected] .urlbarView-title, .urlbarView-row[selected] .urlbarView-url {{ color: {text} !important; }}
+.search-one-offs, .searchbar-engine-one-off-item {{ background: {mantle} !important; color: {text} !important; }}
+
+/* popups, menus, panels, sidebar, find bar */
+menupopup, panel, .panel-arrowcontent, .panel-subview-body, #appMenu-popup {{ --panel-background: {mantle}; --panel-color: {text}; color: {text} !important; background: {mantle} !important; border-color: {s1} !important; }}
+menuitem, menu, .subviewbutton, .panel-subview-footer-button {{ color: {text} !important; }}
+menuitem[_moz-menuactive], menu[_moz-menuactive], .subviewbutton:hover:not([disabled]), toolbarbutton[_moz-menuactive] {{ background-color: {s1} !important; color: {text} !important; }}
+menuitem[disabled], .subviewbutton[disabled] {{ color: {o1} !important; }}
+menuseparator, toolbarseparator, .panel-header, .panel-subview-footer {{ border-color: {s1} !important; background-color: transparent !important; }}
+#sidebar-box, #sidebar-header, #sidebar {{ background: {mantle} !important; color: {text} !important; }}
+findbar {{ background: {mantle} !important; color: {text} !important; border-color: {s1} !important; }}
+findbar textbox, .findbar-textbox {{ background: {s0} !important; color: {text} !important; border-color: {s1} !important; }}
+#browser, #appcontent, #tabbrowser-tabpanels, #tabbrowser-tabbox {{ background: {base} !important; }}
+tooltip {{ background: {mantle} !important; color: {text} !important; border-color: {s1} !important; }}
+.badged-button .toolbarbutton-badge {{ background-color: {red} !important; }}
+notification, .notificationbox-stack, .infobar, notification-message {{ --info-bar-background: {s1}; background: {s1} !important; color: {text} !important; border-color: {s2} !important; }}
+notification .notification-button, .infobar button {{ background: {s2} !important; color: {text} !important; }}
+"#
     ));
     s
 }
@@ -199,9 +420,13 @@ fn firefox_content_css(t: &ThemeDef) -> String {
     let (base, mantle, s0, s1, text, sub, blue, purple) = (c(p.base), c(p.mantle), c(p.surface0), c(p.surface1), c(p.text), c(p.subtext0), c(p.blue), c(p.purple));
     // only Firefox's own pages (new tab, about:*), never the sites you visit
     s.push_str(&format!(
-        "@-moz-document url-prefix(\"about:\") {{\n  :root {{\n    --in-content-page-background: {base} !important;\n    --in-content-page-color: {text} !important;\n    --in-content-text-color: {text} !important;\n    --in-content-deemphasized-text: {sub} !important;\n    --in-content-box-background: {s0} !important;\n    --in-content-box-border-color: {s1} !important;\n    --in-content-border-color: {s1} !important;\n    --in-content-item-hover: {s1} !important;\n    --in-content-link-color: {blue} !important;\n    --in-content-link-color-hover: {purple} !important;\n    --in-content-primary-button-background: {blue} !important;\n    --in-content-primary-button-text-color: {base} !important;\n    --newtab-background-color: {base} !important;\n    --newtab-background-color-secondary: {s0} !important;\n    --newtab-text-primary-color: {text} !important;\n    --newtab-element-hover-color: {s1} !important;\n    --newtab-border-color: {s1} !important;\n    --newtab-wallpaper-color: {mantle} !important;\n  }}\n  body {{ background-color: {base} !important; color: {text} !important; }}\n}}\n"
+        "@-moz-document url-prefix(\"about:\") {{\n  :root {{\n    --in-content-page-background: {base} !important;\n    --in-content-page-color: {text} !important;\n    --in-content-text-color: {text} !important;\n    --in-content-deemphasized-text: {sub} !important;\n    --in-content-box-background: {s0} !important;\n    --in-content-box-border-color: {s1} !important;\n    --in-content-border-color: {s1} !important;\n    --in-content-item-hover: {s1} !important;\n    --in-content-link-color: {blue} !important;\n    --in-content-link-color-hover: {purple} !important;\n    --in-content-primary-button-background: {blue} !important;\n    --in-content-primary-button-text-color: {base} !important;\n    --newtab-background-color: {base} !important;\n    --newtab-background-color-secondary: {s0} !important;\n    --newtab-text-primary-color: {text} !important;\n    --newtab-element-hover-color: {s1} !important;\n    --newtab-border-color: {s1} !important;\n    --newtab-wallpaper-color: {mantle} !important;\n    --newtab-wordmark-color: {text} !important;\n    --newtab-link-primary-color: {blue} !important;\n    --newtab-primary-action-background: {blue} !important;\n    --newtab-card-background-color: {s0} !important;\n    --newtab-section-header-text-color: {text} !important;\n    --newtab-text-secondary-color: {sub} !important;\n  }}\n  body {{ background-color: {base} !important; color: {text} !important; }}\n}}\n"
     ));
     s
+}
+
+fn ff_has_css_import(path: &std::path::Path, needle: &str) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|s| s.lines().any(|l| l.contains("@import") && l.contains(needle)))
 }
 
 fn ff_has(path: &std::path::Path, needle: &str) -> bool {
@@ -228,6 +453,8 @@ fn file_of(t: &Target) -> PathBuf {
         Kind::Ghostty => config_dir().join("ghostty/themes/mtheme"),
         Kind::Alacritty => config_dir().join("alacritty/mtheme.toml"),
         Kind::Firefox => firefox_profiles().first().map(|p| p.join("chrome/mtheme-chrome.css")).unwrap_or_default(),
+        Kind::Waybar => waybar_file(),
+        Kind::Rofi => rofi_file(),
         Kind::App => theme::config_path(),
     }
 }
@@ -245,6 +472,16 @@ fn include_of(t: &Target) -> Option<(PathBuf, &'static str, &'static str)> {
 pub fn needs_setup(t: &Target) -> Option<String> {
     match t.kind {
         Kind::App => None,
+        Kind::Rofi => {
+            let conf = config_dir().join("rofi/config.rasi");
+            let ok = std::fs::read_to_string(&conf).is_ok_and(|s| s.lines().any(|l| !l.trim_start().starts_with("//") && l.contains("mtheme.rasi")));
+            (!ok).then(|| format!("{} does not load mtheme's theme; press I to add the @import", conf.display()))
+        }
+        Kind::Waybar => {
+            let Some(style) = waybar_style() else { return Some("could not find waybar's stylesheet; set MTHEME_WAYBAR_STYLE=/path/to/style.css".into()) };
+            let ok = ff_has_css_import(&style, "mtui/waybar.css");
+            (!ok).then(|| format!("{} does not import mtheme's file; press I to add the @import", style.display()))
+        }
         Kind::Firefox => {
             let n = firefox_profiles().iter().filter(|p| !firefox_missing(p).is_empty()).count();
             (n > 0).then(|| format!("Firefox ({} profile{}) is not set up to read mtheme's CSS; press I (adds an @import to userChrome.css / userContent.css and a pref to user.js)", n, if n == 1 { "" } else { "s" }))
@@ -264,6 +501,40 @@ pub fn needs_setup(t: &Target) -> Option<String> {
 
 /// Append the include line to the terminal's config (kitty, ghostty).
 pub fn install(t: &Target) -> Result<String, String> {
+    if t.kind == Kind::Rofi {
+        if needs_setup(t).is_none() {
+            return Ok("already set up".into());
+        }
+        let conf = config_dir().join("rofi/config.rasi");
+        let mut text = std::fs::read_to_string(&conf).unwrap_or_default();
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        if !rofi_file().exists() {
+            write(&rofi_file(), &rofi_rasi(&theme::THEMES[theme::lookup("rofi").unwrap_or(0)]))?;
+        }
+        text.push_str(&format!("@import \"{}\"\n", rofi_file().display()));
+        write(&conf, &text)?;
+        return Ok(format!("added an @import of {} to {}", rofi_file().display(), conf.display()));
+    }
+    if t.kind == Kind::Waybar {
+        let Some(style) = waybar_style() else { return Err("could not find waybar's stylesheet; set MTHEME_WAYBAR_STYLE=/path/to/style.css".into()) };
+        if ff_has_css_import(&style, "mtui/waybar.css") {
+            return Ok("already set up".into());
+        }
+        let file = waybar_file();
+        if !file.exists() {
+            write(&file, &waybar_css(&theme::THEMES[theme::lookup("waybar").unwrap_or(0)]))?;
+        }
+        let mut text = std::fs::read_to_string(&style).map_err(|e| format!("{}: {}", style.display(), e))?;
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        // last, so it wins over the rules above it
+        text.push_str(&format!("@import url(\"{}\");\n", file.display()));
+        write(&style, &text)?;
+        return Ok(format!("added an @import of {} to {}", file.display(), style.display()));
+    }
     if t.kind == Kind::Firefox {
         let mut done = Vec::new();
         for p in firefox_profiles() {
@@ -317,6 +588,15 @@ pub fn apply(t: &Target, i: usize) -> Result<String, String> {
             write(&path, &alacritty_conf(def))?;
             Ok(format!("alacritty: {} (reloads by itself once imported)", def.name))
         }
+        Kind::Rofi => {
+            write(&path, &rofi_rasi(def))?;
+            Ok(format!("rofi: {} (used the next time rofi opens)", def.name))
+        }
+        Kind::Waybar => {
+            write(&path, &waybar_css(def))?;
+            let live = quiet("pkill", &["-USR2", "-x", "waybar"]);
+            Ok(format!("waybar: {}{}", def.name, if live { "" } else { " (written; restart waybar)" }))
+        }
         Kind::Firefox => {
             let profiles = firefox_profiles();
             for p in &profiles {
@@ -340,6 +620,15 @@ mod tests {
         assert!(ghostty_conf(t).contains("palette = 15=#adc9bc"));
         assert!(alacritty_conf(t).contains("[colors.bright]") && alacritty_conf(t).contains("white = \"#adc9bc\""));
         assert!(!kitty_conf(&theme::THEMES[0]).contains("color0"));
+        assert!(rofi_rasi(t).contains("bg: #1e2528") && rofi_rasi(&theme::THEMES[0]).lines().count() == 1);
+        let wb = waybar_css(t);
+        assert!(wb.contains("window#waybar { background: #191e21") && wb.contains(".ws.focused { border-color: #b2caed; background: #b2caed;"));
+        // light theme: text on the blue button must still read
+        let sm = waybar_css(&theme::THEMES[4]);
+        let line = sm.lines().find(|l| l.starts_with(".ws.focused")).unwrap();
+        let fg = line.split("color: ").last().unwrap().trim_end_matches("; }").to_string();
+        let parse = |h: &str| (u8::from_str_radix(&h[1..3], 16).unwrap(), u8::from_str_radix(&h[3..5], 16).unwrap(), u8::from_str_radix(&h[5..7], 16).unwrap());
+        assert!(theme::contrast(parse(&fg), rgb_of(0x8294AD)) >= 4.5, "{}", line);
         let ff = firefox_chrome_css(t);
         assert!(ff.contains("--toolbar-bgcolor: #1e2528") && ff.contains("--lwt-accent-color: #191e21"));
         assert!(firefox_content_css(t).contains("about:") && !firefox_chrome_css(&theme::THEMES[0]).contains("--toolbar"));

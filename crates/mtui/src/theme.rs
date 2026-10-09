@@ -168,20 +168,45 @@ fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     (m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
 }
 
-/// `fg` if it reads on `bg` (4.5:1); otherwise `fg` pushed toward white (on a
-/// dark background) or black until it does.
+/// `fg` if it reads on `bg` (4.5:1); otherwise `fg` with its lightness moved
+/// (up on a dark background, down on a light one) until it does, keeping its
+/// hue so a red stays red rather than going grey.
 pub fn legible(fg: Rgb, bg: Rgb) -> Rgb {
     if contrast(fg, bg) >= 4.5 {
         return fg;
     }
-    let toward = if contrast(bg, (255, 255, 255)) > contrast(bg, (0, 0, 0)) { (255, 255, 255) } else { (0, 0, 0) };
-    for k in 1..=20 {
-        let c = mix(fg, toward, k as f32 / 20.0);
+    let up = contrast(bg, (255, 255, 255)) > contrast(bg, (0, 0, 0));
+    let (h, s, l) = hsl(fg);
+    for k in 1..=50 {
+        let l2 = if up { l + (1.0 - l) * k as f32 / 50.0 } else { l * (1.0 - k as f32 / 50.0) };
+        // a darker colour needs a little more saturation to still read as its hue
+        let s2 = if up { s } else { (s * (1.0 + 0.5 * k as f32 / 50.0)).min(1.0) };
+        let c = from_hsl(h, s2, l2);
         if contrast(c, bg) >= 4.5 {
             return c;
         }
     }
-    toward
+    if up {
+        (255, 255, 255)
+    } else {
+        (0, 0, 0)
+    }
+}
+
+fn from_hsl(h: f32, s: f32, l: f32) -> Rgb {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match (h / 60.0) as u32 % 6 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let f = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    (f(r), f(g), f(b))
 }
 
 fn hsl(c: Rgb) -> (f32, f32, f32) {
@@ -245,7 +270,11 @@ impl Pal {
         }
         let accent = rgb_of(self.accent(h, s));
         // dark shades are tints (diff backgrounds, selections), light ones the accent itself
-        let f = (0.2 + (l - 0.19) / 0.36 * 0.8).clamp(0.2, 1.0);
+        let mut f = (0.2 + (l - 0.19) / 0.36 * 0.8).clamp(0.2, 1.0);
+        if luminance(rgb_of(self.base)) > 0.4 {
+            // on a light theme a faint tint barely shows; make diffs and selections readable
+            f = if f < 0.97 { (f * 1.5 + 0.12).min(0.85) } else { f };
+        }
         if f > 0.97 {
             accent
         } else {
@@ -441,6 +470,27 @@ mod tests {
         // a dark green diff background is a tint, darker than the accent
         let add = resolve(0, 22).1.unwrap();
         assert!(luminance(add) < luminance(rgb_of(0xCBE3B3)) && add != rgb_of(0x1E2528));
+        set(0);
+    }
+
+    #[test]
+    fn light_theme_colours_keep_their_hue_and_read() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set(find("summer").unwrap());
+        let (_, base) = resolve(0, 0);
+        let base = base.unwrap();
+        for (idx, hue) in [(203u8, 0.0f32), (114, 100.0), (75, 215.0), (176, 300.0), (180, 40.0)] {
+            let (fg, _) = resolve(idx, 0);
+            let fg = fg.unwrap();
+            assert!(contrast(fg, base) >= 4.5, "index {} reads {:.1}", idx, contrast(fg, base));
+            let (h, s, _) = hsl(fg);
+            assert!(s > 0.15, "index {} went grey (s={:.2})", idx, s);
+            let d = (h - hue).abs().min(360.0 - (h - hue).abs());
+            assert!(d < 70.0, "index {} hue {} vs {}", idx, h, hue);
+        }
+        // a diff-add background is visibly green-tinted, not near-white
+        let add = resolve(0, 22).1.unwrap();
+        assert!(contrast(add, base) > 1.12 && add.1 > add.0);
         set(0);
     }
 

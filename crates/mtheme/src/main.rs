@@ -17,7 +17,7 @@ fn usage() -> ! {
        mtheme list                    the themes and what each app / terminal uses
        mtheme set TARGET THEME        TARGET is an app (mvi mmail mjira mslack mgh),
                                       a terminal (kitty ghostty alacritty)
-                                      or firefox or 'all'
+                                      firefox, waybar (the bar under sway) or rofi or 'all'
        mtheme setup TARGET            let a terminal's config read mtheme's colour file
 
 Apps remember their theme in ~/.config/mtui/themes and switch within a second
@@ -173,7 +173,7 @@ impl App {
             let sel = i == self.sel;
             let bg = if sel { BG_SEL } else { 0 };
             self.screen.fill(0, list_w, y, Style::new(0, bg, 0));
-            let kind = if t.kind == Kind::App { "app" } else if t.kind == Kind::Firefox { "browser" } else { "terminal" };
+            let kind = if t.kind == Kind::App { "app" } else if t.kind == Kind::Firefox { "browser" } else if t.kind == Kind::Waybar { "bar" } else if t.kind == Kind::Rofi { "launcher" } else { "terminal" };
             self.screen.puts(1, y, if sel { "›" } else { " " }, Style::new(ACCENT, bg, BOLD), list_w);
             self.screen.puts(3, y, t.key, Style::new(255, bg, if sel { BOLD } else { 0 }), list_w);
             self.screen.puts(14, y, kind, Style::new(FG_DIM, bg, ITALIC), list_w);
