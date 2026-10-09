@@ -34,6 +34,15 @@ new tab page and other `about:` pages, never websites). `mtheme setup firefox`
 and `toolkit.legacyUserProfileCustomizations.stylesheets` to `user.js`, leaving
 the rest of your files alone. Firefox reads these only at startup, so restart it.
 
+**Waybar** (the bar under sway): `~/.config/mtui/waybar.css` recolours your bar
+(`mtheme setup waybar` adds one `@import` at the end of the stylesheet waybar
+loads) and the desktop background follows the bar's colour: `swaymsg output * bg`
+now, and `~/.config/mtui/sway-bg` is re-applied by a line `setup` adds to a
+`bar.sh` next to your stylesheet. Classic uses whatever `window#waybar` says in
+your own CSS.
+
+**Rofi** gets `~/.config/rofi/mtheme.rasi`, imported from `config.rasi`.
+
 **Claude desktop is not supported.** It deliberately refuses to start when a
 debugging switch such as `--remote-debugging-port` is present, which is the only
 non-invasive way to inject CSS into an Electron app; patching its files would

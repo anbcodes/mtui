@@ -222,6 +222,34 @@ fn rofi_rasi(t: &ThemeDef) -> String {
     s
 }
 
+/// The bar's background, which the desktop background follows: the theme's
+/// mantle, or for Classic whatever the user's own stylesheet gives `window#waybar`.
+fn bar_background(t: &ThemeDef) -> String {
+    if let Some(p) = &t.pal {
+        return hex(rgb_of(p.mantle));
+    }
+    let css = waybar_style().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
+    css.split("window#waybar").nth(1).and_then(|r| r.split("background:").nth(1)).and_then(|r| r.split([';', '}']).next()).map(|c| c.trim().to_string()).filter(|c| c.starts_with('#') && c.len() == 7).unwrap_or_else(|| "#000000".into())
+}
+
+fn sway_bg_file() -> PathBuf {
+    theme::config_path().with_file_name("sway-bg")
+}
+
+/// Paint sway's desktop with `color` now, and remember it for the next start.
+fn set_sway_bg(color: &str) -> bool {
+    let _ = write(&sway_bg_file(), &format!("{}\n", color));
+    quiet("swaymsg", &["output", "*", "bg", color, "solid_color"])
+}
+
+/// The line that makes the bar's startup script repaint the desktop.
+const BAR_SH_LINE: &str = r#"[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/mtui/sway-bg" ] && swaymsg output '*' bg "$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/mtui/sway-bg")" solid_color"#;
+
+/// `bar.sh` next to the stylesheet's directory, when there is one (the wm setup runs it from sway).
+fn bar_sh() -> Option<PathBuf> {
+    waybar_style().and_then(|f| f.canonicalize().ok()).and_then(|f| f.parent().map(|d| d.join("bar.sh"))).filter(|p| p.is_file())
+}
+
 fn waybar_file() -> PathBuf {
     theme::config_path().with_file_name("waybar.css")
 }
@@ -489,7 +517,8 @@ pub fn needs_setup(t: &Target) -> Option<String> {
         Kind::Waybar => {
             let Some(style) = waybar_style() else { return Some("could not find waybar's stylesheet; set MTHEME_WAYBAR_STYLE=/path/to/style.css".into()) };
             let ok = ff_has_css_import(&style, "mtui/waybar.css");
-            (!ok).then(|| format!("{} does not import mtheme's file; press I to add the @import", style.display()))
+            let sh_ok = bar_sh().is_none_or(|b| std::fs::read_to_string(b).is_ok_and(|t| t.contains("mtui/sway-bg")));
+            (!ok || !sh_ok).then(|| format!("{} / bar.sh do not load mtheme's files; press I to add the @import and the desktop-background line", style.display()))
         }
         Kind::Firefox => {
             let n = firefox_profiles().iter().filter(|p| !firefox_missing(p).is_empty()).count();
@@ -528,8 +557,18 @@ pub fn install(t: &Target) -> Result<String, String> {
     }
     if t.kind == Kind::Waybar {
         let Some(style) = waybar_style() else { return Err("could not find waybar's stylesheet; set MTHEME_WAYBAR_STYLE=/path/to/style.css".into()) };
+        let mut did = Vec::new();
+        if let Some(b) = bar_sh() {
+            let text = std::fs::read_to_string(&b).map_err(|e| format!("{}: {}", b.display(), e))?;
+            if !text.contains("mtui/sway-bg") {
+                // before the final `exec waybar`, which replaces the shell
+                let at = text.rfind("\nexec ").map(|i| i + 1).unwrap_or(text.len());
+                write(&b, &format!("{}{}\n{}", &text[..at], BAR_SH_LINE, &text[at..]))?;
+                did.push(format!("the desktop-background line to {}", b.display()));
+            }
+        }
         if ff_has_css_import(&style, "mtui/waybar.css") {
-            return Ok("already set up".into());
+            return Ok(if did.is_empty() { "already set up".into() } else { format!("added {}", did.join(" and ")) });
         }
         let file = waybar_file();
         if !file.exists() {
@@ -542,7 +581,8 @@ pub fn install(t: &Target) -> Result<String, String> {
         // last, so it wins over the rules above it
         text.push_str(&format!("@import url(\"{}\");\n", file.display()));
         write(&style, &text)?;
-        return Ok(format!("added an @import of {} to {}", file.display(), style.display()));
+        did.insert(0, format!("an @import of {} to {}", file.display(), style.display()));
+        return Ok(format!("added {}", did.join(" and ")));
     }
     if t.kind == Kind::Firefox {
         let mut done = Vec::new();
@@ -604,7 +644,9 @@ pub fn apply(t: &Target, i: usize) -> Result<String, String> {
         Kind::Waybar => {
             write(&path, &waybar_css(def))?;
             let live = quiet("pkill", &["-USR2", "-x", "waybar"]);
-            Ok(format!("waybar: {}{}", def.name, if live { "" } else { " (written; restart waybar)" }))
+            let bg = bar_background(def);
+            let painted = set_sway_bg(&bg);
+            Ok(format!("waybar: {}, desktop {}{}", def.name, bg, if live && painted { "" } else { " (written; restart waybar / reload sway)" }))
         }
         Kind::Firefox => {
             let profiles = firefox_profiles();
@@ -630,6 +672,7 @@ mod tests {
         assert!(alacritty_conf(t).contains("[colors.bright]") && alacritty_conf(t).contains("white = \"#adc9bc\""));
         assert!(!kitty_conf(&theme::THEMES[0]).contains("color0"));
         assert!(rofi_rasi(t).contains("bg: #1e2528") && rofi_rasi(&theme::THEMES[0]).lines().count() == 1);
+        assert_eq!(bar_background(t), "#191e21");
         let wb = waybar_css(t);
         assert!(wb.contains("window#waybar { background: #191e21") && wb.contains(".ws.focused { background: #b2caed;"));
         // light theme: text on the blue button must still read
