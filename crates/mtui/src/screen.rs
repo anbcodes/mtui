@@ -46,6 +46,18 @@ pub struct Screen {
     shown: Vec<Placement>,
 }
 
+/// Send 24-bit colour: on unless `MTUI_COLORS=256` or a terminal known not to
+/// have it.
+fn truecolor() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        if std::env::var("MTUI_COLORS").is_ok_and(|v| v == "256") {
+            return false;
+        }
+        !matches!(std::env::var("TERM").as_deref(), Ok("linux" | "dumb" | "vt100" | "vt220" | "screen" | "xterm-color"))
+    })
+}
+
 /// sRGB of an xterm-256 palette index.
 fn rgb(i: u8) -> (f32, f32, f32) {
     const BASE: [(u8, u8, u8); 16] = [(0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 0, 205), (0, 205, 205), (229, 229, 229), (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0), (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255)];
@@ -259,11 +271,18 @@ impl Screen {
         if st.attr & REVERSE != 0 {
             out.extend_from_slice(b";7");
         }
-        if st.fg != 0 {
-            let _ = write!(out, ";38;5;{}", st.fg);
-        }
-        if st.bg != 0 {
-            let _ = write!(out, ";48;5;{}", st.bg);
+        for (sel, c) in [(38, st.fg), (48, st.bg)] {
+            if c == 0 {
+                continue;
+            }
+            if c >= 16 && truecolor() {
+                // explicit RGB: some terminals re-derive the 256-colour cube
+                // from their theme, which turns the "black" tag text orange
+                let (r, g, b) = rgb(c);
+                let _ = write!(out, ";{};2;{};{};{}", sel, r as u8, g as u8, b as u8);
+            } else {
+                let _ = write!(out, ";{};5;{}", sel, c);
+            }
         }
         out.push(b'm');
     }
