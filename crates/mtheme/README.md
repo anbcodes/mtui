@@ -52,10 +52,16 @@ built in; yours go in `~/.config/mtui/sites/NAME.css` (`mtheme sites new NAME DO
 `mtheme sites probe` a console script that reports how a signed-in site colours
 itself. The `theme-website` skill (`.claude/skills/`) walks through theming a new site.
 
-**Claude desktop is not supported.** It deliberately refuses to start when a
-debugging switch such as `--remote-debugging-port` is present, which is the only
-non-invasive way to inject CSS into an Electron app; patching its files would
-defeat that protection and break on updates.
+**Sites you can edit the stylesheet of** (an unpacked Electron app, a userstyle):
+`mtheme sites css NAME [THEME]` prints just the CSS, between `/* >>> mtheme … */` and
+`/* <<< mtheme … */` markers so an older chunk can be stripped before appending a new one.
+The built-in `claude-app` template re-colours Claude's UI that way: it replaces the nine
+`--cds-*` colour ramps (everything else, including the light/dark swap, derives from them) and
+the legacy `--bg-*`/`--text-*`/`--accent-*` tokens. It is not applied through Firefox.
+
+**Claude desktop** is not driven by mtheme: the app refuses to start when a debugging switch such as
+`--remote-debugging-port` is present, so CSS cannot be injected into it. Editing its renderer
+stylesheet by hand with the chunk above works, until an update replaces the file.
 
 Keys in the picker: `j k` row, `h l` previous / next theme, `1`–`5` pick,
 `a` give every target the highlighted row's theme, `I` set up a terminal, `q`.

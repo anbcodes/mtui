@@ -64,6 +64,15 @@ fn sites_cli(a: &[String]) {
             Err(e) => eprintln!("mtheme: {}", e),
         },
         Some("probe") => print!("{}", sites::PROBE_JS),
+        // just the CSS, without the Firefox wrapper: for sites you can edit the stylesheet of (Electron apps, userstyles)
+        Some("css") if a.len() >= 2 => match sites::all().into_iter().find(|s| s.name == a[1]) {
+            Some(s) => match sites::render_body(&s, &theme::THEMES[theme_i(2)]) {
+                // markers, so an older chunk can be removed before appending a new one
+                Ok(css) => print!("/* >>> mtheme {} ({}) */\n{}\n/* <<< mtheme {} */\n", s.name, theme::THEMES[theme_i(2)].id, css.trim(), s.name),
+                Err(e) => eprintln!("mtheme: {}", e),
+            },
+            None => eprintln!("mtheme: no site '{}' (mtheme sites)", a[1]),
+        },
         Some("inject") if a.len() >= 2 => match sites::all().into_iter().find(|s| s.name == a[1]) {
             // a console one-liner that applies the rendered CSS to the open page, to iterate without restarting Firefox
             Some(s) => match sites::render_body(&s, &theme::THEMES[theme_i(2)]) {
@@ -72,7 +81,7 @@ fn sites_cli(a: &[String]) {
             },
             None => eprintln!("mtheme: no site '{}' (mtheme sites)", a[1]),
         },
-        _ => println!("usage: mtheme sites [list]\n       mtheme sites render NAME [THEME]\n       mtheme sites new NAME DOMAIN\n       mtheme sites probe     (JavaScript to run in the site's console)\n       mtheme sites inject NAME [THEME]   (console one-liner: try the CSS on the open page)"),
+        _ => println!("usage: mtheme sites [list]\n       mtheme sites render NAME [THEME]\n       mtheme sites new NAME DOMAIN\n       mtheme sites probe     (JavaScript to run in the site's console)\n       mtheme sites css NAME [THEME]      (the CSS alone, without the Firefox wrapper)\n       mtheme sites inject NAME [THEME]   (console one-liner: try the CSS on the open page)"),
     }
 }
 

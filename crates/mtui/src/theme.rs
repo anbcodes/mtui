@@ -193,7 +193,7 @@ pub fn legible(fg: Rgb, bg: Rgb) -> Rgb {
     }
 }
 
-fn from_hsl(h: f32, s: f32, l: f32) -> Rgb {
+pub fn from_hsl(h: f32, s: f32, l: f32) -> Rgb {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
     let m = l - c / 2.0;
@@ -209,7 +209,7 @@ fn from_hsl(h: f32, s: f32, l: f32) -> Rgb {
     (f(r), f(g), f(b))
 }
 
-fn hsl(c: Rgb) -> (f32, f32, f32) {
+pub fn hsl(c: Rgb) -> (f32, f32, f32) {
     let (r, g, b) = (c.0 as f32 / 255.0, c.1 as f32 / 255.0, c.2 as f32 / 255.0);
     let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
     let l = (mx + mn) / 2.0;
