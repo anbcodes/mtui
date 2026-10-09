@@ -21,7 +21,7 @@ fn usage() -> ! {
                                       a terminal (kitty ghostty alacritty)
                                       firefox, waybar (the bar under sway), rofi,\n                                      sway (window borders / title bars, swaynag) or mako
        mtheme sites ...               per-site CSS themes for Firefox (mtheme sites help)\n       mtheme claude ...              re-colour a copy of Claude desktop's renderer CSS (extract / apply / pack) or 'all'
-       mtheme setup TARGET            let a terminal's config read mtheme's colour file
+       mtheme setup TARGET            let a terminal's config read mtheme's colour file\n                                      (firefox also installs the userscript loader: ~/.config/mtui/scripts/*.js)
 
 Apps remember their theme in ~/.config/mtui/themes and switch within a second
 of it changing, even while running (Ctrl-T in an app steps to the next theme).
@@ -87,6 +87,7 @@ fn sites_cli(a: &[String]) {
 }
 
 fn cli(args: &[String]) {
+    targets::MAY_PROMPT_SUDO.store(true, Ordering::Relaxed);
     match args[0].as_str() {
         "-h" | "--help" => usage(),
         "list" => {

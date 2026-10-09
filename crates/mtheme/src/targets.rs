@@ -397,6 +397,88 @@ fn swaynag_is_ours() -> bool {
     std::fs::read_to_string(swaynag_config()).map(|s| s.contains("written by mtheme")).unwrap_or(true)
 }
 
+// ---- Userscripts: a Firefox autoconfig loader for ~/.config/mtui/scripts/*.js ----
+
+const LOADER_PREF: &str = include_str!("../autoconfig/autoconfig.js");
+const LOADER_CFG: &str = include_str!("../autoconfig/mozilla.cfg");
+const SCRIPT_EXAMPLE: &str = "// @domain example.com\n// Rename to example.js (and restart Firefox) to run. `document` and `window` are the page's.\nconsole.log(\"mtheme script ran on\", location.href);\n";
+
+/// Set by the command line, where a sudo prompt is fine; the picker (raw terminal) leaves it off.
+/// Scripts mtheme ships for sites that need more than CSS, written to the scripts folder as mtheme-NAME.js.
+const SITE_SCRIPTS: [(&str, &str); 1] = [("duckduckgo", include_str!("../sites/duckduckgo.js"))];
+
+pub static MAY_PROMPT_SUDO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn scripts_dir() -> PathBuf {
+    theme::config_path().with_file_name("scripts")
+}
+
+/// The directory of the Firefox install that `firefox` runs (where mozilla.cfg has to live).
+fn firefox_install_dir() -> Option<PathBuf> {
+    let mut cands: Vec<PathBuf> = Vec::new();
+    if let Some(p) = std::env::var_os("PATH") {
+        for d in std::env::split_paths(&p) {
+            if let Ok(real) = d.join("firefox").canonicalize() {
+                cands.extend(real.parent().map(|p| p.to_path_buf()));
+            }
+        }
+    }
+    cands.extend(["/usr/lib/firefox", "/usr/lib/firefox-esr", "/usr/lib64/firefox", "/opt/firefox"].map(PathBuf::from));
+    cands.into_iter().find(|d| d.join("defaults/pref").is_dir())
+}
+
+fn loader_files() -> Option<[(PathBuf, &'static str); 2]> {
+    let d = firefox_install_dir()?;
+    Some([(d.join("defaults/pref/autoconfig.js"), LOADER_PREF), (d.join("mozilla.cfg"), LOADER_CFG)])
+}
+
+/// `Some(true)` when the loader is installed and current, `Some(false)` when it is missing or stale,
+/// `None` when no Firefox install directory was found.
+fn loader_current() -> Option<bool> {
+    Some(loader_files()?.iter().all(|(p, text)| std::fs::read_to_string(p).is_ok_and(|t| t == *text)))
+}
+
+fn writable(dir: &std::path::Path) -> bool {
+    let probe = dir.join(".mtheme-probe");
+    let ok = std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
+}
+
+/// Install the loader (through sudo when the Firefox directory is not ours) and make the scripts folder.
+fn install_loader(allow_sudo: bool) -> Result<String, String> {
+    let Some(files) = loader_files() else { return Err("could not find Firefox's install directory".into()) };
+    let _ = std::fs::create_dir_all(scripts_dir());
+    let ex = scripts_dir().join("example.js.disabled");
+    if !ex.exists() {
+        let _ = std::fs::write(&ex, SCRIPT_EXAMPLE);
+    }
+    if loader_current() == Some(true) {
+        return Ok("script loader already installed".into());
+    }
+    let dir = files[1].0.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let direct = writable(&dir);
+    if !direct && !allow_sudo {
+        return Err(format!("the script loader needs root to install into {}; run `mtheme setup firefox`", dir.display()));
+    }
+    let tmp = std::env::temp_dir().join(format!("mtheme-loader-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    for (dest, text) in &files {
+        let src = tmp.join(dest.file_name().unwrap_or_default());
+        std::fs::write(&src, text).map_err(|e| e.to_string())?;
+        let (src_s, dest_s) = (src.to_string_lossy().into_owned(), dest.to_string_lossy().into_owned());
+        let args = ["install", "-m", "644", &src_s, &dest_s];
+        println!("  $ {}{}", if direct { "" } else { "sudo " }, args.join(" "));
+        let st = if direct { Command::new(args[0]).args(&args[1..]).status() } else { Command::new("sudo").args(args).status() }.map_err(|e| format!("{}: {}", args[0], e))?;
+        if !st.success() {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Err(format!("could not install {}", dest.display()));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(format!("installed the script loader into {} (scripts: {}; restart Firefox)", dir.display(), scripts_dir().display()))
+}
+
 // ---- Firefox: userChrome.css / userContent.css in each install's profile ----
 
 fn firefox_roots() -> Vec<PathBuf> {
@@ -670,7 +752,10 @@ pub fn needs_setup(t: &Target) -> Option<String> {
         }
         Kind::Firefox => {
             let n = firefox_profiles().iter().filter(|p| !firefox_missing(p).is_empty()).count();
-            (n > 0).then(|| format!("Firefox ({} profile{}) is not set up to read mtheme's CSS; press I (adds an @import to userChrome.css / userContent.css and a pref to user.js)", n, if n == 1 { "" } else { "s" }))
+            if n > 0 {
+                return Some(format!("Firefox ({} profile{}) is not set up to read mtheme's CSS; press I (adds an @import to userChrome.css / userContent.css and a pref to user.js)", n, if n == 1 { "" } else { "s" }));
+            }
+            (loader_current() == Some(false)).then(|| "Firefox does not have mtheme's userscript loader; run `mtheme setup firefox` (needs sudo)".to_string())
         }
         Kind::Alacritty => {
             let conf = config_dir().join("alacritty/alacritty.toml");
@@ -778,7 +863,13 @@ pub fn install(t: &Target) -> Result<String, String> {
                 done.push(format!("{}/{}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), f));
             }
         }
-        return Ok(if done.is_empty() { "already set up".into() } else { format!("updated {} (restart Firefox)", done.join(", ")) });
+        let loader = install_loader(true);
+        let mut msg = if done.is_empty() { "CSS already set up".to_string() } else { format!("updated {} (restart Firefox)", done.join(", ")) };
+        match loader {
+            Ok(m) => msg.push_str(&format!("; {}", m)),
+            Err(e) => msg.push_str(&format!("; script loader: {}", e)),
+        }
+        return Ok(msg);
     }
     let Some((conf, _, line)) = include_of(t) else { return Err(needs_setup(t).unwrap_or_else(|| "nothing to install".into())) };
     if needs_setup(t).is_none() {
@@ -850,7 +941,16 @@ pub fn apply(t: &Target, i: usize) -> Result<String, String> {
                 write(&p.join("chrome/mtheme-chrome.css"), &firefox_chrome_css(def))?;
                 write(&p.join("chrome/mtheme-content.css"), &format!("{}{}", firefox_content_css(def), site_css))?;
             }
-            let note = if site_errs.is_empty() { String::new() } else { format!(" — site problems: {}", site_errs.join("; ")) };
+            let _ = std::fs::create_dir_all(scripts_dir());
+            for (name, text) in SITE_SCRIPTS {
+                let _ = std::fs::write(scripts_dir().join(format!("mtheme-{}.js", name)), text);
+            }
+            let mut note = if site_errs.is_empty() { String::new() } else { format!(" — site problems: {}", site_errs.join("; ")) };
+            if loader_current() == Some(false) {
+                if let Err(e) = install_loader(MAY_PROMPT_SUDO.load(std::sync::atomic::Ordering::Relaxed)) {
+                    note.push_str(&format!(" — script loader: {}", e));
+                }
+            }
             Ok(format!("firefox: {} ({} profile{}; restart Firefox to see it){}", def.name, profiles.len(), if profiles.len() == 1 { "" } else { "s" }, note))
         }
     }
