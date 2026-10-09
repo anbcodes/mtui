@@ -18,6 +18,9 @@ impl App {
             self.screen.invalidate();
             return;
         }
+        if matches!(self.mode, Mode::Edit(..)) {
+            return self.edit_key(k);
+        }
         if k == Key::Ctrl('k') && matches!(self.mode, Mode::Normal) {
             return self.pick_project();
         }
@@ -84,7 +87,7 @@ impl App {
                     }
                 }
             },
-            Mode::Help | Mode::Image(_) => {}
+            Mode::Help | Mode::Image(_) | Mode::Edit(..) => {}
         }
     }
 

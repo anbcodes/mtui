@@ -37,7 +37,7 @@ One column per status of the project, in workflow order (to do, in progress, don
 | `p` | priority |
 | `c` | comment |
 | `e` `#` | edit the summary, set the labels |
-| `E` `C` | edit the description, edit your latest comment. Existing text opens as markdown-style markup (`**bold**`, lists, ``` fences, `> quotes`, tables, `:::info` panels) and converts back losslessly: anything it cannot show as text stays in ` ```adf-json ` / ` ```wiki-raw ` blocks, so saving never drops content (Server/Data Center use wiki markup, Cloud uses ADF) |
+| `c` `E` `C` | comment, edit the description, edit your latest comment. These open mvi docked at the bottom (your `~/.config/mvi/config` applies): `:wq` sends, `:q!` cancels, `gwip` reflows a paragraph, `:set tw=N` sets the width. Existing text opens as markdown-style markup (`**bold**`, lists, ``` fences, `> quotes`, tables, `:::info` panels) and converts back losslessly: anything it cannot show as text stays in ` ```adf-json ` / ` ```wiki-raw ` blocks, so saving never drops content (Server/Data Center use wiki markup, Cloud uses ADF) |
 | `w` `W` | watch / stop watching, log work (`1h 30m`, then an optional note) |
 | `n` | new issue in the project (pick a type, type the summary) |
 | `o` `y` | open in the browser, copy the URL |

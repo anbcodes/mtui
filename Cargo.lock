@@ -113,6 +113,7 @@ dependencies = [
  "mhttp",
  "mimg",
  "mtui",
+ "mvi",
 ]
 
 [[package]]

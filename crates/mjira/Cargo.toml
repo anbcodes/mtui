@@ -9,3 +9,4 @@ libc.workspace = true
 mtui.workspace = true
 mhttp.workspace = true
 mimg.workspace = true
+mvi.workspace = true

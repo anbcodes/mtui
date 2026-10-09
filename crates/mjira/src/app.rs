@@ -58,7 +58,9 @@ issue:
   ```wiki-raw blocks (and <adf>…</adf> inline), so editing never loses it.
 mouse: click a tab, card, row or sidebar issue (double-click opens), an image
        (fullscreen); wheel scrolls; shift+drag selects text (terminal)
-compose: Enter sends   Alt-Enter newline   Esc cancels";
+compose: Enter sends   Alt-Enter newline   Esc cancels
+long text (c E C): edited in mvi — :wq sends, :q! cancels, gwip reflows,
+  :set tw=N sets the width";
 
 /// One choice in a picker.
 #[derive(Clone)]
@@ -115,6 +117,9 @@ pub enum Mode {
     Filter(LineEdit),
     Jql,
     Compose(Purpose, LineEdit),
+    /// Writing a comment or description in mvi, docked at the bottom: the
+    /// pane, its temp file, what it started with, and what the text is for.
+    Edit(Box<mvi::Pane>, std::path::PathBuf, String, Purpose),
     Pick(Picker<Opt>, PickKind),
     Help,
     /// An image shown fullscreen, by gallery key.
@@ -619,17 +624,15 @@ impl App {
     }
 
     fn compose(&mut self, p: Purpose) {
+        if matches!(p, Purpose::Comment | Purpose::Description | Purpose::EditComment(_)) {
+            return self.begin_edit(p);
+        }
         let mut e = LineEdit::new();
         match (&p, &self.detail) {
             (Purpose::New(_), _) => {}
             (_, None) => return,
             (Purpose::Summary, Some(d)) => e.set(&d.head.summary),
             (Purpose::Labels, Some(d)) => e.set(&d.head.labels.join(" ")),
-            (Purpose::Description, Some(d)) => e.set(&markup_text(d.issue.path("fields.description"))),
-            (Purpose::EditComment(id), Some(d)) => {
-                let Some(c) = d.comments.iter().find(|c| c.get("id").str() == id) else { return };
-                e.set(&markup_text(c.get("body")));
-            }
             _ => {}
         }
         self.mode = Mode::Compose(p, e);
@@ -639,6 +642,58 @@ impl App {
         let Some(p) = self.project.clone() else { return self.error("no project; pick one with C-k") };
         self.info("loading issue types…");
         self.call(Tag::Types, Req::get(format!("/project/{}", mhttp::urlencode(&p))));
+    }
+
+    /// The text a long-form purpose starts from.
+    fn initial_text(&self, p: &Purpose) -> Option<String> {
+        let d = self.detail.as_ref()?;
+        match p {
+            Purpose::Comment => Some(String::new()),
+            Purpose::Description => Some(markup_text(d.issue.path("fields.description"))),
+            Purpose::EditComment(id) => d.comments.iter().find(|c| c.get("id").str() == id).map(|c| markup_text(c.get("body"))),
+            _ => None,
+        }
+    }
+
+    /// Write long text in mvi, in a pane at the bottom of the screen.
+    fn begin_edit(&mut self, p: Purpose) {
+        let Some(mut text) = self.initial_text(&p) else { return };
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        match write_temp(&text) {
+            Ok(path) => {
+                let (w, h) = (self.screen.w, pane_h(self.screen.h));
+                self.mode = Mode::Edit(Box::new(mvi::Pane::open(w, h, &path, 1)), path, text, p);
+                self.info(":wq to save, :q! to cancel · gwip reflows a paragraph");
+            }
+            Err(e) => self.error(e),
+        }
+    }
+
+    /// A key for the pane; when the editor quits, send what it left.
+    pub(crate) fn edit_key(&mut self, k: mtui::term::Key) {
+        let h = self.screen.h;
+        let Mode::Edit(pane, ..) = &mut self.mode else { return };
+        let mut k = k;
+        if let mtui::term::Key::Mouse(m) = &mut k {
+            let y0 = h - 1 - pane_h(h);
+            if m.y < y0 || m.y >= h - 1 {
+                return;
+            }
+            m.y -= y0;
+        }
+        pane.key(k);
+        if pane.finished() {
+            let Mode::Edit(_, path, orig, p) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
+            let r = std::fs::read_to_string(&path);
+            let _ = std::fs::remove_file(&path);
+            match r {
+                Ok(t) if t.trim() == orig.trim() => self.info("no changes"),
+                Ok(t) => self.send_compose(p, &t),
+                Err(e) => self.error(e.to_string()),
+            }
+        }
     }
 
     /// Edit the newest comment you wrote.
@@ -879,4 +934,19 @@ fn markup_text(v: &Value) -> String {
         Value::Obj(_) => markup::adf_to_text(v),
         _ => String::new(),
     }
+}
+
+pub fn pane_h(h: usize) -> usize {
+    (h / 2).max(10).min(h.saturating_sub(8))
+}
+
+/// Write `text` to a new private temp file for the editor.
+fn write_temp(text: &str) -> Result<std::path::PathBuf, String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("mjira-{}-{}.md", std::process::id(), t));
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    f.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(path)
 }

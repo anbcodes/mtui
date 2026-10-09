@@ -255,6 +255,9 @@ impl App {
         }
         let mut cursor = None;
         let mut bottom = y_status; // first row not available to the body
+        if matches!(self.mode, Mode::Edit(..)) {
+            bottom = y_status - pane_h(h);
+        }
 
         if let Mode::Compose(p, e) = &self.mode {
             let prompt = match p {
@@ -294,6 +297,7 @@ impl App {
             Mode::Filter(_) => (" FILTER ", 108),
             Mode::Jql => (" SEARCH ", 108),
             Mode::Compose(..) => (" COMPOSE ", 108),
+            Mode::Edit(..) => (" EDIT ", 108),
             Mode::Pick(..) => (" PICK ", 180),
             _ if self.detail.is_some() => (" ISSUE ", 110),
             _ if self.tab == BOARD_TAB => (" BOARD ", 73),
@@ -340,8 +344,12 @@ impl App {
             }
             _ => {}
         }
-        if matches!(self.mode, Mode::Pick(..) | Mode::Help) {
+        if matches!(self.mode, Mode::Pick(..) | Mode::Help | Mode::Edit(..)) {
             self.screen.set_images(Vec::new());
+        }
+        if let Mode::Edit(pane, ..) = &mut self.mode {
+            let ph = pane_h(h);
+            cursor = pane.draw(&mut self.screen, (0, y_status - ph), (w, ph));
         }
         self.screen.flush(cursor);
     }
@@ -634,7 +642,7 @@ impl App {
             }
         }
         let mut ims = Vec::new();
-        if !matches!(self.mode, Mode::Pick(..) | Mode::Help) {
+        if !matches!(self.mode, Mode::Pick(..) | Mode::Help | Mode::Edit(..)) {
             for (id, (y, x, i0, i1, of, url)) in pics {
                 if let Some((cols, _)) = self.gallery.size(url, img_cols(x), 14) {
                     ims.extend(self.gallery.place(url, id, (x, y), cols, of, i0, i1));
