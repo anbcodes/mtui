@@ -163,7 +163,7 @@ pub fn contrast(a: Rgb, b: Rgb) -> f32 {
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
-fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
+pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round().clamp(0.0, 255.0) as u8;
     (m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
 }
@@ -229,6 +229,36 @@ fn hsl(c: Rgb) -> (f32, f32, f32) {
 }
 
 impl Pal {
+    /// A colour by its palette name (`base`, `surface1`, `blue`, ...).
+    pub fn get(&self, name: &str) -> Option<u32> {
+        Some(match name {
+            "base" => self.base,
+            "mantle" => self.mantle,
+            "crust" => self.crust,
+            "surface0" => self.surface0,
+            "surface1" => self.surface1,
+            "surface2" => self.surface2,
+            "overlay0" => self.overlay0,
+            "overlay1" => self.overlay1,
+            "overlay2" => self.overlay2,
+            "subtext0" => self.subtext0,
+            "subtext1" => self.subtext1,
+            "text" => self.text,
+            "red" => self.red,
+            "orange" => self.orange,
+            "yellow" => self.yellow,
+            "lime" => self.lime,
+            "green" => self.green,
+            "aqua" => self.aqua,
+            "skye" => self.skye,
+            "snow" => self.snow,
+            "blue" | "accent" => self.blue,
+            "purple" => self.purple,
+            "pink" => self.pink,
+            _ => return None,
+        })
+    }
+
     fn accent(&self, hue: f32, sat: f32) -> u32 {
         // muted tan reads as yellow, saturated orange stays orange
         let hue = if (25.0..32.0).contains(&hue) && sat < 0.7 { 34.0 } else { hue };

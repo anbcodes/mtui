@@ -43,6 +43,15 @@ your own CSS.
 
 **Rofi** gets `~/.config/rofi/mtheme.rasi`, imported from `config.rasi`.
 
+**Websites** (Firefox): `mtheme sites` lists per-site CSS templates — CSS with
+`{{blue}}`, `{{mix base blue 0.2}}`, `{{ink blue}}` … placeholders and a
+`/* mtheme-site: domain.com */` header — which `mtheme set firefox` renders for the
+active theme into `userContent.css` inside `@-moz-document domain(...)`. Fastmail is
+built in; yours go in `~/.config/mtui/sites/NAME.css` (`mtheme sites new NAME DOMAIN`).
+`mtheme sites inject NAME` prints a console one-liner to try a template live,
+`mtheme sites probe` a console script that reports how a signed-in site colours
+itself. The `theme-website` skill (`.claude/skills/`) walks through theming a new site.
+
 **Claude desktop is not supported.** It deliberately refuses to start when a
 debugging switch such as `--remote-debugging-port` is present, which is the only
 non-invasive way to inject CSS into an Electron app; patching its files would

@@ -650,11 +650,13 @@ pub fn apply(t: &Target, i: usize) -> Result<String, String> {
         }
         Kind::Firefox => {
             let profiles = firefox_profiles();
+            let (site_css, site_errs) = crate::sites::render_all(def);
             for p in &profiles {
                 write(&p.join("chrome/mtheme-chrome.css"), &firefox_chrome_css(def))?;
-                write(&p.join("chrome/mtheme-content.css"), &firefox_content_css(def))?;
+                write(&p.join("chrome/mtheme-content.css"), &format!("{}{}", firefox_content_css(def), site_css))?;
             }
-            Ok(format!("firefox: {} ({} profile{}; restart Firefox to see it)", def.name, profiles.len(), if profiles.len() == 1 { "" } else { "s" }))
+            let note = if site_errs.is_empty() { String::new() } else { format!(" — site problems: {}", site_errs.join("; ")) };
+            Ok(format!("firefox: {} ({} profile{}; restart Firefox to see it){}", def.name, profiles.len(), if profiles.len() == 1 { "" } else { "s" }, note))
         }
     }
 }

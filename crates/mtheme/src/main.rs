@@ -1,3 +1,4 @@
+mod sites;
 mod targets;
 
 use mtui::screen::{Screen, Style, BOLD, ITALIC};
@@ -17,7 +18,8 @@ fn usage() -> ! {
        mtheme list                    the themes and what each app / terminal uses
        mtheme set TARGET THEME        TARGET is an app (mvi mmail mjira mslack mgh),
                                       a terminal (kitty ghostty alacritty)
-                                      firefox, waybar (the bar under sway) or rofi or 'all'
+                                      firefox, waybar (the bar under sway) or rofi
+       mtheme sites ...               per-site CSS themes for Firefox (mtheme sites help) or 'all'
        mtheme setup TARGET            let a terminal's config read mtheme's colour file
 
 Apps remember their theme in ~/.config/mtui/themes and switch within a second
@@ -39,6 +41,39 @@ fn theme_arg(s: &str) -> usize {
 fn set_all(i: usize) -> Vec<Result<String, String>> {
     let _ = theme::save("*", i);
     targets::all().iter().map(|t| targets::apply(t, i)).collect()
+}
+
+fn sites_cli(a: &[String]) {
+    let theme_i = |i: usize| a.get(i).map(|t| theme_arg(t)).unwrap_or_else(|| targets::current(&targets::find("firefox").unwrap_or(Target { key: "firefox", kind: Kind::Firefox })).unwrap_or(1).max(1));
+    match a.first().map(String::as_str) {
+        None | Some("list") => {
+            for s in sites::all() {
+                println!("  {:<14} {}{}", s.name, s.domains.join(", "), if s.builtin { "" } else { "  (yours)" });
+            }
+            println!("\ntemplates: {}", theme::config_path().with_file_name("sites").display());
+        }
+        Some("render") if a.len() >= 2 => match sites::all().into_iter().find(|s| s.name == a[1]) {
+            Some(s) => match sites::render(&s, &theme::THEMES[theme_i(2)]) {
+                Ok(css) => print!("{}", css),
+                Err(e) => eprintln!("mtheme: {}", e),
+            },
+            None => eprintln!("mtheme: no site '{}' (mtheme sites)", a[1]),
+        },
+        Some("new") if a.len() == 3 => match sites::create(&a[1], &a[2]) {
+            Ok(p) => println!("created {}", p.display()),
+            Err(e) => eprintln!("mtheme: {}", e),
+        },
+        Some("probe") => print!("{}", sites::PROBE_JS),
+        Some("inject") if a.len() >= 2 => match sites::all().into_iter().find(|s| s.name == a[1]) {
+            // a console one-liner that applies the rendered CSS to the open page, to iterate without restarting Firefox
+            Some(s) => match sites::render_body(&s, &theme::THEMES[theme_i(2)]) {
+                Ok(css) => println!("(()=>{{const s=document.getElementById('mtheme-test')||document.head.appendChild(Object.assign(document.createElement('style'),{{id:'mtheme-test'}}));s.textContent={};}})()", mtui::json::quote(&css)),
+                Err(e) => eprintln!("mtheme: {}", e),
+            },
+            None => eprintln!("mtheme: no site '{}' (mtheme sites)", a[1]),
+        },
+        _ => println!("usage: mtheme sites [list]\n       mtheme sites render NAME [THEME]\n       mtheme sites new NAME DOMAIN\n       mtheme sites probe     (JavaScript to run in the site's console)\n       mtheme sites inject NAME [THEME]   (console one-liner: try the CSS on the open page)"),
+    }
 }
 
 fn cli(args: &[String]) {
@@ -75,6 +110,7 @@ fn cli(args: &[String]) {
                 }
             }
         }
+        "sites" => sites_cli(&args[1..]),
         "setup" if args.len() == 2 => match targets::find(&args[1]) {
             Some(t) => match targets::install(&t) {
                 Ok(m) => println!("{}", m),
