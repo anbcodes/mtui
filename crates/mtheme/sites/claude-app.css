@@ -967,6 +967,21 @@
 }
 }
 
+/* Tokens the site fixes to a literal colour (white overlays in light mode, black in dark mode) instead
+   of deriving them from the ramps. Which one is right depends on the palette's polarity, not on the
+   mode, so both mode selectors get the same value: the dark mode's own definition on a dark palette,
+   the light mode's on a light one. */
+:root, :host, [data-mode="light"], [data-mode="dark"], .darkTheme {
+  --cds-fill-secondary: {{if-dark raw var(--cds-alpha-2) | raw #ffffff1a}} !important;
+  --cds-fill-field: {{if-dark raw var(--cds-alpha-1) | raw #ffffff80}} !important;
+  --cds-fill-secondary-ring: {{if-dark raw transparent | raw var(--cds-border)}} !important;
+  --cds-backdrop: {{if-dark raw #00000080 | raw #0006}} !important;
+  --cds-button-on-content: {{if-dark raw #0000008c | raw #fff9}} !important;
+  --cds-button-on-content-hover: {{if-dark raw #000000a6 | raw #ffffffb3}} !important;
+  --cds-button-on-content-ring: {{if-dark raw transparent | raw #ffffff59}} !important;
+  --cds-shadow-color: {{if-dark raw #0000003d | raw #00000014}} !important;
+}
+
 :root, .darkTheme, html[data-theme][data-color-version][data-mode="light"], html[data-theme][data-color-version][data-mode="dark"], html[data-theme][data-color-version][data-mode="system"], html[data-theme]:not([data-mode]) {
   --accent-brand: {{hsl orange}} !important;
   --brand-000: {{hsl mix orange text 0.14}} !important;

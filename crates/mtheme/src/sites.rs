@@ -20,6 +20,7 @@
 //     {{hsl blue}}             "h s% l%", for sites that wrap it in hsl(var(--x) / a)
 //     {{ramp 0.3}}             the palette's neutrals as one scale, lightest (0) to darkest (1)
 //     {{chroma blue 0.3}}      the same lightness as {{ramp 0.3}}, in blue's hue
+//     {{raw TEXT}}             TEXT unchanged (handy inside {{if-dark A | B}})
 //     {{scheme}}               dark | light
 
 use mtui::theme::{self, hex, mix, rgb_of, Pal, Rgb, ThemeDef};
@@ -147,6 +148,8 @@ fn expr(def: &ThemeDef, p: &Pal, e: &str) -> Result<String, String> {
         ["scheme"] => (if light { "light" } else { "dark" }).into(),
         ["name"] => def.name.into(),
         [c] => hex(color(p, c)?),
+        // text passed through unchanged, for if-dark branches that are not colours: {{raw var(--x)}}
+        ["raw", rest @ ..] => rest.join(" "),
         ["hsl", rest @ ..] if !rest.is_empty() => {
             let inner = expr(def, p, &rest.join(" "))?;
             let (h, sat, l) = theme::hsl(color(p, &inner)?);
@@ -261,6 +264,9 @@ mod tests {
         }
         let w = &theme::THEMES[1];
         assert_eq!(expr(w, w.pal.as_ref().unwrap(), "hsl red").unwrap(), "358 85.5% 72.9%");
+        assert_eq!(expr(w, w.pal.as_ref().unwrap(), "if-dark raw var(--a) | raw #fff").unwrap(), "var(--a)");
+        let l = &theme::THEMES[4];
+        assert_eq!(expr(l, l.pal.as_ref().unwrap(), "if-dark raw var(--a) | raw #fff").unwrap(), "#fff");
     }
 
     #[test]
