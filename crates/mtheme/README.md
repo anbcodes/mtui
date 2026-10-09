@@ -59,9 +59,22 @@ The built-in `claude-app` template re-colours Claude's UI that way: it replaces 
 `--cds-*` colour ramps (everything else, including the light/dark swap, derives from them) and
 the legacy `--bg-*`/`--text-*`/`--accent-*` tokens. It is not applied through Firefox.
 
-**Claude desktop** is not driven by mtheme: the app refuses to start when a debugging switch such as
-`--remote-debugging-port` is present, so CSS cannot be injected into it. Editing its renderer
-stylesheet by hand with the chunk above works, until an update replaces the file.
+**Claude desktop** is not driven by mtheme: the app refuses to start when a debugging switch such
+as `--remote-debugging-port` is present, so CSS cannot be injected into it. What works is editing
+its renderer stylesheet and repacking the archive, which `mtheme claude` does in
+`~/.cache/mtheme/claude/` (never in the installed app), shelling out to `npx @electron/asar`
+(`MTHEME_ASAR="npx asar"` to use another command):
+
+```
+mtheme claude build evergarden-winter     extract (once) + apply + pack
+mtheme claude extract [--from app.asar] [--dir DIR] [--force]
+mtheme claude apply [THEME]               replaces the previous chunk in every renderer CSS with the colour variables
+mtheme claude pack [--out FILE]           app.asar + app.asar.unpacked
+```
+
+The packed archive has the same files, modes and unpacked set as the installed one, plus the chunk.
+To run it, put `app.asar` and `app.asar.unpacked` in place of `resources/app.asar*` in a copy of
+`/usr/lib/claude-desktop` that you own; an update of the real app overwrites none of this.
 
 Keys in the picker: `j k` row, `h l` previous / next theme, `1`–`5` pick,
 `a` give every target the highlighted row's theme, `I` set up a terminal, `q`.

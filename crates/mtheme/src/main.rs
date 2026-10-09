@@ -1,3 +1,4 @@
+mod claude;
 mod sites;
 mod targets;
 
@@ -19,7 +20,7 @@ fn usage() -> ! {
        mtheme set TARGET THEME        TARGET is an app (mvi mmail mjira mslack mgh),
                                       a terminal (kitty ghostty alacritty)
                                       firefox, waybar (the bar under sway) or rofi
-       mtheme sites ...               per-site CSS themes for Firefox (mtheme sites help) or 'all'
+       mtheme sites ...               per-site CSS themes for Firefox (mtheme sites help)\n       mtheme claude ...              re-colour a copy of Claude desktop's renderer CSS (extract / apply / pack) or 'all'
        mtheme setup TARGET            let a terminal's config read mtheme's colour file
 
 Apps remember their theme in ~/.config/mtui/themes and switch within a second
@@ -120,6 +121,13 @@ fn cli(args: &[String]) {
             }
         }
         "sites" => sites_cli(&args[1..]),
+        "claude" => match claude::run(&args[1..]) {
+            Ok(m) => println!("{}", m),
+            Err(e) => {
+                eprintln!("mtheme: {}", e);
+                std::process::exit(1);
+            }
+        },
         "setup" if args.len() == 2 => match targets::find(&args[1]) {
             Some(t) => match targets::install(&t) {
                 Ok(m) => println!("{}", m),
