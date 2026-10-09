@@ -11,6 +11,7 @@ pub enum Kind {
     Kitty,
     Ghostty,
     Alacritty,
+    Firefox,
 }
 
 #[derive(Clone)]
@@ -49,6 +50,9 @@ pub fn all() -> Vec<Target> {
     if detected("alacritty", "alacritty") {
         v.push(Target { key: "alacritty", kind: Kind::Alacritty });
     }
+    if !firefox_profiles().is_empty() {
+        v.push(Target { key: "firefox", kind: Kind::Firefox });
+    }
     v
 }
 
@@ -57,6 +61,7 @@ pub fn find(key: &str) -> Option<Target> {
         "kitty" => Some(Target { key: "kitty", kind: Kind::Kitty }),
         "ghostty" => Some(Target { key: "ghostty", kind: Kind::Ghostty }),
         "alacritty" => Some(Target { key: "alacritty", kind: Kind::Alacritty }),
+        "firefox" => Some(Target { key: "firefox", kind: Kind::Firefox }),
         _ => None,
     })
 }
@@ -128,11 +133,101 @@ fn alacritty_conf(t: &ThemeDef) -> String {
     s
 }
 
+// ---- Firefox: userChrome.css / userContent.css in each install's profile ----
+
+fn firefox_roots() -> Vec<PathBuf> {
+    vec![home().join(".mozilla/firefox"), config_dir().join("mozilla/firefox"), home().join(".var/app/org.mozilla.firefox/.mozilla/firefox"), home().join("snap/firefox/common/.mozilla/firefox")]
+}
+
+/// The profile each Firefox install uses (plus any marked default).
+pub fn firefox_profiles() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for root in firefox_roots() {
+        let Ok(ini) = std::fs::read_to_string(root.join("profiles.ini")) else { continue };
+        let (mut section, mut path, mut rel, mut default) = (String::new(), String::new(), true, false);
+        let mut found: Vec<PathBuf> = Vec::new();
+        let flush = |section: &str, path: &str, rel: bool, default: bool, found: &mut Vec<PathBuf>| {
+            if path.is_empty() || !(section.starts_with("Install") || default) {
+                return;
+            }
+            let p = if rel || !path.starts_with('/') { root.join(path) } else { PathBuf::from(path) };
+            if p.is_dir() && !found.contains(&p) {
+                found.push(p);
+            }
+        };
+        for l in ini.lines().map(str::trim) {
+            if let Some(name) = l.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+                flush(&section, &path, rel, default, &mut found);
+                (section, path, rel, default) = (name.to_string(), String::new(), true, false);
+            } else if let Some((k, v)) = l.split_once('=') {
+                match k {
+                    "Path" if !section.starts_with("Install") => path = v.to_string(),
+                    "Default" if section.starts_with("Install") => path = v.to_string(),
+                    "Default" => default = v == "1",
+                    "IsRelative" => rel = v == "1",
+                    _ => {}
+                }
+            }
+        }
+        flush(&section, &path, rel, default, &mut found);
+        for p in found {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+const FF_PREF: &str = "toolkit.legacyUserProfileCustomizations.stylesheets";
+
+fn firefox_chrome_css(t: &ThemeDef) -> String {
+    let mut s = format!("/* {} — written by mtheme */\n", t.name);
+    let Some(p) = &t.pal else { return s };
+    let c = |x: u32| hex(rgb_of(x));
+    let (base, mantle, crust, s0, s1, s2, text, sub, blue) = (c(p.base), c(p.mantle), c(p.crust), c(p.surface0), c(p.surface1), c(p.surface2), c(p.text), c(p.subtext0), c(p.blue));
+    s.push_str(&format!(
+        ":root {{\n  --lwt-accent-color: {mantle} !important;\n  --lwt-text-color: {text} !important;\n  --toolbar-bgcolor: {base} !important;\n  --toolbar-color: {text} !important;\n  --toolbar-field-background-color: {s0} !important;\n  --toolbar-field-color: {text} !important;\n  --toolbar-field-border-color: {s1} !important;\n  --toolbar-field-focus-background-color: {s1} !important;\n  --toolbar-field-focus-color: {text} !important;\n  --toolbar-field-focus-border-color: {blue} !important;\n  --tab-selected-bgcolor: {base} !important;\n  --tab-selected-textcolor: {text} !important;\n  --tab-loading-fill: {blue} !important;\n  --arrowpanel-background: {mantle} !important;\n  --arrowpanel-color: {text} !important;\n  --arrowpanel-border-color: {s1} !important;\n  --arrowpanel-dimmed: {s0} !important;\n  --sidebar-background-color: {mantle} !important;\n  --sidebar-text-color: {text} !important;\n  --sidebar-border-color: {s1} !important;\n  --urlbar-box-bgcolor: {s0} !important;\n  --urlbar-box-hover-bgcolor: {s1} !important;\n  --urlbar-box-active-bgcolor: {s2} !important;\n  --urlbar-box-text-color: {text} !important;\n  --toolbarbutton-icon-fill: {text} !important;\n  --toolbarbutton-hover-background: {s1} !important;\n  --toolbarbutton-active-background: {s2} !important;\n  --focus-outline-color: {blue} !important;\n  --button-primary-bgcolor: {blue} !important;\n  --button-primary-color: {base} !important;\n  --chrome-content-separator-color: {crust} !important;\n  --lwt-tab-line-color: {blue} !important;\n  --inactive-titlebar-opacity: 1 !important;\n}}\n#navigator-toolbox {{ background: {mantle} !important; border-color: {crust} !important; }}\n.tab-label:not([selected]) {{ color: {sub} !important; }}\n"
+    ));
+    s
+}
+
+fn firefox_content_css(t: &ThemeDef) -> String {
+    let mut s = format!("/* {} — written by mtheme */\n", t.name);
+    let Some(p) = &t.pal else { return s };
+    let c = |x: u32| hex(rgb_of(x));
+    let (base, mantle, s0, s1, text, sub, blue, purple) = (c(p.base), c(p.mantle), c(p.surface0), c(p.surface1), c(p.text), c(p.subtext0), c(p.blue), c(p.purple));
+    // only Firefox's own pages (new tab, about:*), never the sites you visit
+    s.push_str(&format!(
+        "@-moz-document url-prefix(\"about:\") {{\n  :root {{\n    --in-content-page-background: {base} !important;\n    --in-content-page-color: {text} !important;\n    --in-content-text-color: {text} !important;\n    --in-content-deemphasized-text: {sub} !important;\n    --in-content-box-background: {s0} !important;\n    --in-content-box-border-color: {s1} !important;\n    --in-content-border-color: {s1} !important;\n    --in-content-item-hover: {s1} !important;\n    --in-content-link-color: {blue} !important;\n    --in-content-link-color-hover: {purple} !important;\n    --in-content-primary-button-background: {blue} !important;\n    --in-content-primary-button-text-color: {base} !important;\n    --newtab-background-color: {base} !important;\n    --newtab-background-color-secondary: {s0} !important;\n    --newtab-text-primary-color: {text} !important;\n    --newtab-element-hover-color: {s1} !important;\n    --newtab-border-color: {s1} !important;\n    --newtab-wallpaper-color: {mantle} !important;\n  }}\n  body {{ background-color: {base} !important; color: {text} !important; }}\n}}\n"
+    ));
+    s
+}
+
+fn ff_has(path: &std::path::Path, needle: &str) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|s| s.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(needle)))
+}
+
+fn firefox_missing(profile: &std::path::Path) -> Vec<&'static str> {
+    let mut m = Vec::new();
+    if !ff_has(&profile.join("chrome/userChrome.css"), "mtheme-chrome.css") {
+        m.push("userChrome.css");
+    }
+    if !ff_has(&profile.join("chrome/userContent.css"), "mtheme-content.css") {
+        m.push("userContent.css");
+    }
+    if !ff_has(&profile.join("user.js"), FF_PREF) {
+        m.push("user.js");
+    }
+    m
+}
+
 fn file_of(t: &Target) -> PathBuf {
     match t.kind {
         Kind::Kitty => config_dir().join("kitty/current-theme.conf"),
         Kind::Ghostty => config_dir().join("ghostty/themes/mtheme"),
         Kind::Alacritty => config_dir().join("alacritty/mtheme.toml"),
+        Kind::Firefox => firefox_profiles().first().map(|p| p.join("chrome/mtheme-chrome.css")).unwrap_or_default(),
         Kind::App => theme::config_path(),
     }
 }
@@ -150,6 +245,10 @@ fn include_of(t: &Target) -> Option<(PathBuf, &'static str, &'static str)> {
 pub fn needs_setup(t: &Target) -> Option<String> {
     match t.kind {
         Kind::App => None,
+        Kind::Firefox => {
+            let n = firefox_profiles().iter().filter(|p| !firefox_missing(p).is_empty()).count();
+            (n > 0).then(|| format!("Firefox ({} profile{}) is not set up to read mtheme's CSS; press I (adds an @import to userChrome.css / userContent.css and a pref to user.js)", n, if n == 1 { "" } else { "s" }))
+        }
         Kind::Alacritty => {
             let conf = config_dir().join("alacritty/alacritty.toml");
             let ok = std::fs::read_to_string(&conf).is_ok_and(|s| s.contains("mtheme.toml"));
@@ -165,6 +264,24 @@ pub fn needs_setup(t: &Target) -> Option<String> {
 
 /// Append the include line to the terminal's config (kitty, ghostty).
 pub fn install(t: &Target) -> Result<String, String> {
+    if t.kind == Kind::Firefox {
+        let mut done = Vec::new();
+        for p in firefox_profiles() {
+            for f in firefox_missing(&p) {
+                let (path, line, top) = match f {
+                    "userChrome.css" => (p.join("chrome/userChrome.css"), "@import url(\"mtheme-chrome.css\");".to_string(), true),
+                    "userContent.css" => (p.join("chrome/userContent.css"), "@import url(\"mtheme-content.css\");".to_string(), true),
+                    _ => (p.join("user.js"), format!("user_pref(\"{}\", true);", FF_PREF), false),
+                };
+                let old = std::fs::read_to_string(&path).unwrap_or_default();
+                // @import must come before any rule, so it goes first
+                let text = if top { format!("{}\n{}", line, old) } else { format!("{}{}\n", if old.is_empty() || old.ends_with('\n') { old } else { old + "\n" }, line) };
+                write(&path, &text)?;
+                done.push(format!("{}/{}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), f));
+            }
+        }
+        return Ok(if done.is_empty() { "already set up".into() } else { format!("updated {} (restart Firefox)", done.join(", ")) });
+    }
     let Some((conf, _, line)) = include_of(t) else { return Err(needs_setup(t).unwrap_or_else(|| "nothing to install".into())) };
     if needs_setup(t).is_none() {
         return Ok("already set up".into());
@@ -200,6 +317,14 @@ pub fn apply(t: &Target, i: usize) -> Result<String, String> {
             write(&path, &alacritty_conf(def))?;
             Ok(format!("alacritty: {} (reloads by itself once imported)", def.name))
         }
+        Kind::Firefox => {
+            let profiles = firefox_profiles();
+            for p in &profiles {
+                write(&p.join("chrome/mtheme-chrome.css"), &firefox_chrome_css(def))?;
+                write(&p.join("chrome/mtheme-content.css"), &firefox_content_css(def))?;
+            }
+            Ok(format!("firefox: {} ({} profile{}; restart Firefox to see it)", def.name, profiles.len(), if profiles.len() == 1 { "" } else { "s" }))
+        }
     }
 }
 
@@ -215,5 +340,8 @@ mod tests {
         assert!(ghostty_conf(t).contains("palette = 15=#adc9bc"));
         assert!(alacritty_conf(t).contains("[colors.bright]") && alacritty_conf(t).contains("white = \"#adc9bc\""));
         assert!(!kitty_conf(&theme::THEMES[0]).contains("color0"));
+        let ff = firefox_chrome_css(t);
+        assert!(ff.contains("--toolbar-bgcolor: #1e2528") && ff.contains("--lwt-accent-color: #191e21"));
+        assert!(firefox_content_css(t).contains("about:") && !firefox_chrome_css(&theme::THEMES[0]).contains("--toolbar"));
     }
 }

@@ -16,13 +16,15 @@ fn usage() -> ! {
         "usage: mtheme                         pick a theme for each app, with a preview
        mtheme list                    the themes and what each app / terminal uses
        mtheme set TARGET THEME        TARGET is an app (mvi mmail mjira mslack mgh),
-                                      a terminal (kitty ghostty alacritty) or 'all'
+                                      a terminal (kitty ghostty alacritty)
+                                      or firefox or 'all'
        mtheme setup TARGET            let a terminal's config read mtheme's colour file
 
 Apps remember their theme in ~/.config/mtui/themes and switch within a second
 of it changing, even while running (Ctrl-T in an app steps to the next theme).
 Terminals get a colour file (kitty: ~/.config/kitty/current-theme.conf) and are
-asked to reload. MTUI_THEME=NAME overrides the saved theme for one run."
+asked to reload. Firefox gets userChrome.css / userContent.css rules for its own
+UI and about: pages (never websites); restart it to apply. MTUI_THEME=NAME overrides the saved theme for one run."
     );
     std::process::exit(0);
 }
@@ -171,7 +173,7 @@ impl App {
             let sel = i == self.sel;
             let bg = if sel { BG_SEL } else { 0 };
             self.screen.fill(0, list_w, y, Style::new(0, bg, 0));
-            let kind = if t.kind == Kind::App { "app" } else { "terminal" };
+            let kind = if t.kind == Kind::App { "app" } else if t.kind == Kind::Firefox { "browser" } else { "terminal" };
             self.screen.puts(1, y, if sel { "›" } else { " " }, Style::new(ACCENT, bg, BOLD), list_w);
             self.screen.puts(3, y, t.key, Style::new(255, bg, if sel { BOLD } else { 0 }), list_w);
             self.screen.puts(14, y, kind, Style::new(FG_DIM, bg, ITALIC), list_w);

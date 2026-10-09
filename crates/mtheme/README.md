@@ -27,5 +27,17 @@ Inside an app `Ctrl-T` steps to the next theme (mvi: `:theme`, `:theme NAME`).
 appends the include line for kitty and ghostty; alacritty is shown as a hint.
 Only terminals found on this machine are listed.
 
+**Firefox**: for each install's profile mtheme writes `chrome/mtheme-chrome.css`
+(toolbar, tabs, URL bar, panels, sidebar) and `chrome/mtheme-content.css` (the
+new tab page and other `about:` pages, never websites). `mtheme setup firefox`
+(or `I`) adds an `@import` line at the top of `userChrome.css` / `userContent.css`
+and `toolkit.legacyUserProfileCustomizations.stylesheets` to `user.js`, leaving
+the rest of your files alone. Firefox reads these only at startup, so restart it.
+
+**Claude desktop is not supported.** It deliberately refuses to start when a
+debugging switch such as `--remote-debugging-port` is present, which is the only
+non-invasive way to inject CSS into an Electron app; patching its files would
+defeat that protection and break on updates.
+
 Keys in the picker: `j k` row, `h l` previous / next theme, `1`–`5` pick,
 `a` give every target the highlighted row's theme, `I` set up a terminal, `q`.
