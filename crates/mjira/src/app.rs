@@ -8,6 +8,7 @@ mod draw;
 mod keys;
 
 use crate::adf;
+use crate::markup;
 use crate::api::{self, Flavor, Net, Reply, Req, Tag, Why};
 use crate::model::{self, Column, Issue};
 use mtui::json::{quote, Value};
@@ -47,11 +48,14 @@ issue:
   J K (L H)    next / previous issue in the list; the list is the sidebar
                while you read (Tab moves there, j k switch)   b  hide it
   c            comment             e  edit the summary  #  labels
+  E            edit the description    C  edit your latest comment
   t a i p      transition, assign, assign to me, priority
   w            watch / stop watching     W  log work (1h 30m, then a note)
   o y r        browser, copy URL, refresh        q Esc h  back
-  Text you write: blank line = paragraph, - or 1. lists, ``` code, **bold**,
-  `code`, [text](url) and bare links.
+  Text you write: blank line = paragraph, - or 1. lists, ``` code, > quote,
+  | tables, **bold**, *italic*, `code`, [text](url). Existing text opens as
+  the same markup; what it can't show as text is kept in ```adf-json /
+  ```wiki-raw blocks (and <adf>…</adf> inline), so editing never loses it.
 mouse: click a tab, card, row or sidebar issue (double-click opens), an image
        (fullscreen); wheel scrolls; shift+drag selects text (terminal)
 compose: Enter sends   Alt-Enter newline   Esc cancels";
@@ -93,6 +97,9 @@ pub enum Purpose {
     Summary,
     Labels,
     Worklog,
+    Description,
+    /// The comment with this id.
+    EditComment(String),
     /// A new issue of this type id.
     New(String),
 }
@@ -541,11 +548,11 @@ impl App {
     }
 
     /// A text field's value as the API wants it: an ADF document on Cloud,
-    /// the raw text on Server.
+    /// wiki markup on Server.
     fn text_json(&self, text: &str) -> String {
         match self.flavor() {
-            Flavor::Cloud => adf::from_text(text),
-            Flavor::Server => quote(text),
+            Flavor::Cloud => markup::to_json(&markup::text_to_adf(text)),
+            Flavor::Server => quote(&markup::text_to_wiki(text)),
         }
     }
 
@@ -618,6 +625,11 @@ impl App {
             (_, None) => return,
             (Purpose::Summary, Some(d)) => e.set(&d.head.summary),
             (Purpose::Labels, Some(d)) => e.set(&d.head.labels.join(" ")),
+            (Purpose::Description, Some(d)) => e.set(&markup_text(d.issue.path("fields.description"))),
+            (Purpose::EditComment(id), Some(d)) => {
+                let Some(c) = d.comments.iter().find(|c| c.get("id").str() == id) else { return };
+                e.set(&markup_text(c.get("body")));
+            }
             _ => {}
         }
         self.mode = Mode::Compose(p, e);
@@ -629,16 +641,34 @@ impl App {
         self.call(Tag::Types, Req::get(format!("/project/{}", mhttp::urlencode(&p))));
     }
 
+    /// Edit the newest comment you wrote.
+    fn edit_last_comment(&mut self) {
+        let Some(d) = &self.detail else { return };
+        let mine = d.comments.iter().rev().find(|c| model::user_id(c.get("author")) == self.me_id);
+        match mine.map(|c| c.get("id").str().to_string()) {
+            Some(id) => self.compose(Purpose::EditComment(id)),
+            None => self.error("no comment of yours to edit"),
+        }
+    }
+
     fn send_compose(&mut self, p: Purpose, text: &str) {
         let text = text.trim();
         let key = self.detail.as_ref().map(|d| d.key.clone()).unwrap_or_default();
-        if text.is_empty() && p != Purpose::Labels {
+        if text.is_empty() && !matches!(p, Purpose::Labels | Purpose::Description) {
             return self.error("nothing to send");
         }
         match p {
             Purpose::Comment => {
                 let body = format!("{{\"body\":{}}}", self.text_json(text));
                 self.act("commented", Req::send("POST", format!("/issue/{}/comment", mhttp::urlencode(&key)), body));
+            }
+            Purpose::Description => {
+                let v = if text.is_empty() { "null".to_string() } else { self.text_json(text) };
+                self.set_fields("description changed", &key, format!("\"description\":{}", v));
+            }
+            Purpose::EditComment(id) => {
+                let body = format!("{{\"body\":{}}}", self.text_json(text));
+                self.act("comment edited", Req::send("PUT", format!("/issue/{}/comment/{}", mhttp::urlencode(&key), mhttp::urlencode(&id)), body));
             }
             Purpose::Summary => {
                 let s = text.to_string();
@@ -839,5 +869,14 @@ mod tests {
         for t in TABS {
             assert!(HELP.contains(t), "{}", t);
         }
+    }
+}
+
+/// A description or comment body (ADF object or wiki string) as editable text.
+fn markup_text(v: &Value) -> String {
+    match v {
+        Value::Str(w) => markup::wiki_to_text(w),
+        Value::Obj(_) => markup::adf_to_text(v),
+        _ => String::new(),
     }
 }

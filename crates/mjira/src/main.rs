@@ -1,7 +1,6 @@
 mod adf;
 mod api;
 mod app;
-#[allow(dead_code)]
 mod markup;
 mod model;
 mod timefmt;

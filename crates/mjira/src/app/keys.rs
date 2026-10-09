@@ -278,6 +278,8 @@ impl App {
             }
             Key::Char('c') => self.compose(Purpose::Comment),
             Key::Char('e') => self.compose(Purpose::Summary),
+            Key::Char('E') => self.compose(Purpose::Description),
+            Key::Char('C') => self.edit_last_comment(),
             Key::Char('#') => self.compose(Purpose::Labels),
             Key::Char('W') => self.compose(Purpose::Worklog),
             Key::Char('w') => self.toggle_watch(),

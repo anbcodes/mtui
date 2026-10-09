@@ -262,6 +262,8 @@ impl App {
                 Purpose::Summary => "summary› ",
                 Purpose::Labels => "labels› ",
                 Purpose::Worklog => "log work› ",
+                Purpose::Description => "description› ",
+                Purpose::EditComment(_) => "edit comment› ",
                 Purpose::New(_) => "new issue› ",
             };
             let pw = str_width(prompt);

@@ -1,9 +1,9 @@
 // Jira Cloud's rich text is Atlassian Document Format (JSON); Jira Server and
 // Data Center use wiki markup. Both are converted to markdown for display, and
-// what you type goes back as plain paragraphs, lists, code and links.
+// what you type goes back through `markup`.
 
 use crate::timefmt;
-use mtui::json::{quote, Value};
+use mtui::json::Value;
 
 /// Attachments a document may refer to: ADF `media` nodes and wiki `!file!`
 /// show them inline.
@@ -359,152 +359,6 @@ fn wiki_inline(s: &str, m: &mut Media) -> String {
     o
 }
 
-// ---- plain text to a document ----
-
-/// What you typed as a document to send. Cloud wants ADF; the result is the
-/// JSON text of one. Blank lines split paragraphs; `- ` and `1. ` lines make
-/// lists, `#` headings, fences code, and `**bold**`, `` `code` `` and
-/// `[text](url)` (or a bare URL) become marks.
-pub fn from_text(s: &str) -> String {
-    let lines: Vec<&str> = s.lines().collect();
-    let mut blocks: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let l = lines[i];
-        if l.trim().is_empty() {
-            i += 1;
-            continue;
-        }
-        if let Some(lang) = l.trim_start().strip_prefix("```") {
-            let mut code = Vec::new();
-            i += 1;
-            while i < lines.len() && !lines[i].trim_start().starts_with("```") {
-                code.push(lines[i]);
-                i += 1;
-            }
-            i += 1;
-            let body = code.join("\n");
-            let content = if body.is_empty() { String::new() } else { format!(",\"content\":[{{\"type\":\"text\",\"text\":{}}}]", quote(&body)) };
-            blocks.push(format!("{{\"type\":\"codeBlock\",\"attrs\":{{\"language\":{}}}{}}}", quote(lang.trim()), content));
-            continue;
-        }
-        if let Some((level, t)) = heading(l) {
-            blocks.push(format!("{{\"type\":\"heading\",\"attrs\":{{\"level\":{}}},\"content\":[{}]}}", level, inline_nodes(t).join(",")));
-            i += 1;
-            continue;
-        }
-        if item(l).is_some() {
-            let ordered = item(l).is_some_and(|x| x.0);
-            let mut items = Vec::new();
-            while i < lines.len() {
-                match item(lines[i]) {
-                    Some((o, t)) if o == ordered => items.push(format!("{{\"type\":\"listItem\",\"content\":[{{\"type\":\"paragraph\",\"content\":[{}]}}]}}", inline_nodes(t).join(","))),
-                    _ => break,
-                }
-                i += 1;
-            }
-            blocks.push(format!("{{\"type\":\"{}\",\"content\":[{}]}}", if ordered { "orderedList" } else { "bulletList" }, items.join(",")));
-            continue;
-        }
-        let mut para = vec![l];
-        i += 1;
-        while i < lines.len() && !lines[i].trim().is_empty() && !lines[i].trim_start().starts_with("```") && heading(lines[i]).is_none() && item(lines[i]).is_none() {
-            para.push(lines[i]);
-            i += 1;
-        }
-        let nodes: Vec<String> = para.iter().map(|l| inline_nodes(l.trim_end()).join(",")).filter(|s| !s.is_empty()).collect::<Vec<_>>();
-        blocks.push(format!("{{\"type\":\"paragraph\",\"content\":[{}]}}", nodes.join(",{\"type\":\"hardBreak\"},")));
-    }
-    if blocks.is_empty() {
-        blocks.push("{\"type\":\"paragraph\",\"content\":[]}".into());
-    }
-    format!("{{\"version\":1,\"type\":\"doc\",\"content\":[{}]}}", blocks.join(","))
-}
-
-fn heading(l: &str) -> Option<(usize, &str)> {
-    let n = l.chars().take_while(|&c| c == '#').count();
-    (1..=6).contains(&n).then(|| l[n..].strip_prefix(' ').map(|t| (n, t.trim()))).flatten()
-}
-
-/// (ordered, text) for a `- x`, `* x` or `1. x` line.
-fn item(l: &str) -> Option<(bool, &str)> {
-    let t = l.trim_start();
-    if let Some(r) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
-        return Some((false, r.trim()));
-    }
-    let d = t.chars().take_while(|c| c.is_ascii_digit()).count();
-    (d > 0 && d < 4).then(|| t[d..].strip_prefix(". ").map(|r| (true, r.trim()))).flatten()
-}
-
-fn text_node(t: &str, mark: Option<String>) -> String {
-    match mark {
-        Some(m) => format!("{{\"type\":\"text\",\"text\":{},\"marks\":[{}]}}", quote(t), m),
-        None => format!("{{\"type\":\"text\",\"text\":{}}}", quote(t)),
-    }
-}
-
-fn link_mark(u: &str) -> String {
-    format!("{{\"type\":\"link\",\"attrs\":{{\"href\":{}}}}}", quote(u))
-}
-
-fn inline_nodes(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut plain = String::new();
-    let mut i = 0;
-    macro_rules! flush {
-        () => {
-            if !plain.is_empty() {
-                out.push(text_node(&plain, None));
-                plain.clear();
-            }
-        };
-    }
-    while i < s.len() {
-        let rest = &s[i..];
-        if let Some(r) = rest.strip_prefix('`') {
-            if let Some(e) = r.find('`').filter(|&e| e > 0) {
-                flush!();
-                out.push(text_node(&r[..e], Some("{\"type\":\"code\"}".into())));
-                i += e + 2;
-                continue;
-            }
-        }
-        if let Some(r) = rest.strip_prefix("**") {
-            if let Some(e) = r.find("**").filter(|&e| e > 0) {
-                flush!();
-                out.push(text_node(&r[..e], Some("{\"type\":\"strong\"}".into())));
-                i += e + 4;
-                continue;
-            }
-        }
-        if let Some(r) = rest.strip_prefix('[') {
-            if let Some((t, u)) = r.split_once("](").and_then(|(t, r)| r.split_once(')').map(|(u, _)| (t, u))) {
-                if !t.is_empty() && !u.is_empty() {
-                    flush!();
-                    out.push(text_node(t, Some(link_mark(u))));
-                    i += t.len() + u.len() + 4;
-                    continue;
-                }
-            }
-        }
-        if rest.starts_with("http://") || rest.starts_with("https://") {
-            let e = rest.find(char::is_whitespace).unwrap_or(rest.len());
-            let url = rest[..e].trim_end_matches(['.', ',', ')', ';', '!', '?']);
-            if url.len() > 8 {
-                flush!();
-                out.push(text_node(url, Some(link_mark(url))));
-                i += url.len();
-                continue;
-            }
-        }
-        let c = rest.chars().next().unwrap();
-        plain.push(c);
-        i += c.len_utf8();
-    }
-    flush!();
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,16 +394,5 @@ mod tests {
         let s = wiki_to_md("h2. Title\n* one\n** two\n# n1\nSome *bold* and _it_ {{mono}} [link|http://x]\n{code:java}\nint x;\n{code}", &mut m);
         assert_eq!(s, "## Title\n- one\n  - two\n1. n1\nSome **bold** and *it* `mono` [link](http://x)\n```java\nint x;\n```");
         assert_eq!(wiki_to_md("snake_case_name and 2*3*4", &mut m), "snake_case_name and 2*3*4");
-    }
-
-    #[test]
-    fn typed_text_round_trips() {
-        let src = "Intro with `code` and **bold** and https://x.test/a.\nsecond line\n\n- one\n- [two](http://y)\n\n```\nfn main() {}\n```";
-        let j = from_text(src);
-        let v = json::parse(&j).unwrap();
-        assert_eq!(v.get("type").str(), "doc");
-        let back = to_markdown(&v, &mut Media::default());
-        assert_eq!(back, "Intro with `code` and **bold** and [https://x.test/a](https://x.test/a).\nsecond line\n\n- one\n- [two](http://y)\n\n```\nfn main() {}\n```");
-        assert!(json::parse(&from_text("")).is_ok());
     }
 }
