@@ -32,6 +32,10 @@ pub enum Op {
     Upper,
     Toggle,
     Comment,
+    /// gq: reflow to 'textwidth', cursor to the last line
+    Format,
+    /// gw: reflow, cursor stays
+    FormatKeep,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -96,6 +100,7 @@ pub struct Opts {
     pub number: bool,
     pub relnum: bool,
     pub tabstop: usize,
+    pub textwidth: usize,
     pub autocheck: bool,
     pub autocomplete: bool,
     pub hlsearch: bool,
@@ -351,7 +356,7 @@ impl Editor {
             check_rx: rx,
             qf: Vec::new(),
             qf_idx: 0,
-            opts: Opts { number: true, relnum: false, tabstop: 4, autocheck: true, autocomplete: true, hlsearch: true, list: false, mouse: true, checks: HashMap::new() },
+            opts: Opts { number: true, relnum: false, tabstop: 4, textwidth: 79, autocheck: true, autocomplete: true, hlsearch: true, list: false, mouse: true, checks: HashMap::new() },
             quit: false,
             hl_scratch: Vec::new(),
             ins_reg_pending: false,
@@ -1099,6 +1104,81 @@ impl Editor {
         text
     }
 
+    /// Reflow lines l1..=l2 to the text width, paragraph by paragraph. A
+    /// paragraph is a run of lines sharing an indent and comment leader; blank
+    /// lines (and bare leaders) are kept. Returns the last line of the result.
+    fn format_lines(&mut self, l1: usize, l2: usize) -> usize {
+        const LEADERS: [&str; 7] = ["///", "//!", "//", "#", "--", ";", ">"];
+        let ts = self.opts.tabstop;
+        let tw = self.opts.textwidth.max(10);
+        let split = |l: &str| -> (String, String) {
+            let ind = indent_of(l);
+            let rest = &l[ind.len()..];
+            let mut lead = ind.to_string();
+            let mut body = rest;
+            if let Some(m) = LEADERS.iter().find(|m| rest.starts_with(**m)) {
+                lead.push_str(m);
+                body = &rest[m.len()..];
+                if body.starts_with(' ') {
+                    lead.push(' ');
+                    body = &body[1..];
+                }
+            }
+            (lead, body.trim_end().to_string())
+        };
+        let old: Vec<String> = self.bb().lines[l1..=l2].to_vec();
+        let mut out: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < old.len() {
+            let (lead, body) = split(&old[i]);
+            if body.trim().is_empty() {
+                out.push(old[i].trim_end().to_string());
+                i += 1;
+                continue;
+            }
+            let mut words: Vec<String> = body.split_whitespace().map(String::from).collect();
+            // later lines may be indented differently (hanging indent): use the second line's
+            let mut rest_lead = lead.clone();
+            let mut j = i + 1;
+            while j < old.len() {
+                let (l2_, b2) = split(&old[j]);
+                if b2.trim().is_empty() || (l2_.trim_end() != lead.trim_end() && !(j == i + 1 && l2_.trim_start() == lead.trim_start())) {
+                    break;
+                }
+                if j == i + 1 {
+                    rest_lead = l2_;
+                }
+                words.extend(b2.split_whitespace().map(String::from));
+                j += 1;
+            }
+            let mut cur = lead.clone();
+            let mut filled = false;
+            for w in words {
+                let width = disp_col(&cur, cur.len(), ts);
+                let ww: usize = w.chars().map(char_width).sum();
+                if filled && width + 1 + ww > tw {
+                    out.push(std::mem::replace(&mut cur, rest_lead.clone()));
+                    filled = false;
+                }
+                if filled {
+                    cur.push(' ');
+                }
+                cur.push_str(&w);
+                filled = true;
+            }
+            out.push(cur);
+            i = j;
+        }
+        let n = out.len();
+        let b = self.b();
+        if out != old {
+            let end = b.line_len(l2);
+            b.delete((l1, 0), (l2, end));
+            b.insert((l1, 0), &out.join("\n"));
+        }
+        l1 + n - 1
+    }
+
     fn comment_lines(&mut self, l1: usize, l2: usize) {
         let lang = self.bb().lang;
         let (open, close) = if !lang.line_comment.is_empty() {
@@ -1215,6 +1295,16 @@ impl Editor {
                     self.comment_lines(l1, l2);
                     self.set_cursor((l1, self.cursor().1));
                 }
+                Op::Format | Op::FormatKeep => {
+                    let keep = self.cursor();
+                    let last = self.format_lines(l1, l2);
+                    if op == Op::Format {
+                        let x = fnb(&self.bb().lines[last]);
+                        self.set_cursor((last, x));
+                    } else {
+                        self.set_cursor(self.clamp_pos(keep));
+                    }
+                }
                 Op::Lower | Op::Upper | Op::Toggle => {
                     let e = self.bb().line_len(l2);
                     self.case_range((l1, 0), (l2, e), op);
@@ -1233,7 +1323,7 @@ impl Editor {
                 return self.apply_op(op, Target { a, b: z, kind: TK::Line }, reg);
             }
         }
-        if matches!(op, Op::Indent | Op::Dedent | Op::Comment) {
+        if matches!(op, Op::Indent | Op::Dedent | Op::Comment | Op::Format | Op::FormatKeep) {
             return self.apply_op(op, Target { a, b: z, kind: TK::Line }, reg);
         }
         a.1 = a.1.min(self.bb().line_len(a.0));
@@ -1653,6 +1743,8 @@ impl Editor {
             (Key::Char('g'), Some('u')) => (Some(Op::Lower), 2),
             (Key::Char('g'), Some('U')) => (Some(Op::Upper), 2),
             (Key::Char('g'), Some('c')) => (Some(Op::Comment), 2),
+            (Key::Char('g'), Some('q')) => (Some(Op::Format), 2),
+            (Key::Char('g'), Some('w')) => (Some(Op::FormatKeep), 2),
             _ => (None, 0),
         };
         if let Some(op) = op {
@@ -2027,6 +2119,8 @@ impl Editor {
                     return;
                 }
                 Some('c') => Some(Op::Comment),
+                Some('q') => Some(Op::Format),
+                Some('w') => Some(Op::FormatKeep),
                 Some('J') => {
                     exit(self);
                     self.set_cursor(t.a);
@@ -2774,5 +2868,43 @@ impl Editor {
         } else {
             self.msg_lines = lines;
         }
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    fn run(text: &str, tw: usize, keys: &str) -> (String, Pos) {
+        let mut e = Editor::new(80, 24);
+        e.opts.textwidth = tw;
+        let b = e.b();
+        b.lines = text.split('\n').map(String::from).collect();
+        for c in keys.chars() {
+            e.handle_key(Key::Char(c));
+        }
+        (e.bb().lines.join("\n"), e.cursor())
+    }
+
+    #[test]
+    fn gwip_wraps_paragraph_and_keeps_cursor() {
+        let (t, c) = run("aaa bbb ccc ddd eee\nfff\n\nnext para", 10, "gwip");
+        assert_eq!(t, "aaa bbb\nccc ddd\neee fff\n\nnext para");
+        assert_eq!(c, (0, 0));
+    }
+
+    #[test]
+    fn gqq_joins_and_moves_cursor() {
+        let (t, c) = run("a\nb\nc", 20, "gqj");
+        assert_eq!(t, "a b\nc");
+        assert_eq!(c, (0, 0));
+        let (_, c) = run("aaa bbb ccc ddd eee", 10, "gqq");
+        assert_eq!(c.0, 2);
+    }
+
+    #[test]
+    fn comment_leader_is_kept() {
+        let (t, _) = run("    // one two three four five six", 20, "gww");
+        assert_eq!(t, "    // one two three\n    // four five six");
     }
 }

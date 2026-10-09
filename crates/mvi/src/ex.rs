@@ -13,7 +13,7 @@ pub const HELP: &str = "\
 mvi — minimal vim-like editor                       (:bd closes this)
 NORMAL  h j k l w b e W B E ge 0 ^ $ gg G { } % f F t T ; , H M L  counts work
         i a I A o O  x X D C s S r~ J gJ  p P  u ^R  .  ~  ^A ^X  * # n N
-        d c y > < gc(comment) gu gU g~ + motion/text-object (iw aw i( a{ i\" ip ...)
+        d c y > < gc(comment) gq/gw(format: gwip) gu gU g~ + motion/text-object (iw aw i( a{ i\" ip ...)
         v V visual · q{r} record · @{r} play · m{a-z} mark · '{a-z} jump · '' back
         gd goto definition · gf open file · K line diagnostics · ]d [d next/prev diag
         ]e [e next/prev error · ]q [q quickfix · ]b [b buffers · ^^ alt buffer · ^S save
@@ -27,7 +27,7 @@ EX      :w :q :wq :x :q! :qa :wa :e file :e! :enew :bn :bp :bd :b N :ls :N (goto
         :preview (:md) render the buffer as markdown: j k C-d C-u g G, Enter goes to the source line
         :mmd         live HTML preview in the browser: follows edits and the cursor;
                      double-click a block there to jump to its line; :mmd stop
-        :set nu rnu ts=N sw=N et noet list ac(autocheck) acp(autocomplete) hls mouse ft=lang
+        :set nu rnu ts=N sw=N tw=N et noet list ac(autocheck) acp(autocomplete) hls mouse ft=lang
         :checker <lang> <cmd>   (use {file}; prefix 'Marker|' to run where Marker lives)
 MOUSE   click moves the cursor · drag selects (visual) · double-click word · triple-click line
         wheel scrolls · shift+drag uses the terminal's own selection · :set nomouse
@@ -666,11 +666,12 @@ impl Editor {
             let b = self.bb();
             let o = &self.opts;
             let s = format!(
-                "{}number {}relativenumber ts={} sw={} {}expandtab {}autocheck {}autocomplete {}hlsearch {}list {}mouse ft={}",
+                "{}number {}relativenumber ts={} sw={} tw={} {}expandtab {}autocheck {}autocomplete {}hlsearch {}list {}mouse ft={}",
                 if o.number { "" } else { "no" },
                 if o.relnum { "" } else { "no" },
                 o.tabstop,
                 b.indent_w,
+                o.textwidth,
                 if b.expand_tab { "" } else { "no" },
                 if o.autocheck { "" } else { "no" },
                 if o.autocomplete { "" } else { "no" },
@@ -715,6 +716,11 @@ impl Editor {
                     mtui::term::set_mouse(self.opts.mouse);
                 }
                 "et" | "expandtab" => flag!(self.b().expand_tab),
+                "tw" | "textwidth" => {
+                    if let Some(n) = num.filter(|&n| (10..=500).contains(&n)) {
+                        self.opts.textwidth = n;
+                    }
+                }
                 "ts" | "tabstop" => {
                     if let Some(n) = num.filter(|&n| n > 0 && n <= 32) {
                         self.opts.tabstop = n;
