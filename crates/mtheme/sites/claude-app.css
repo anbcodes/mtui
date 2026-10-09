@@ -1025,3 +1025,8 @@
 }
 
 :root { color-scheme: {{scheme}} !important; }
+
+/* controls the site paints with its fixed white / black (close buttons, overlays on previews) */
+[class*="bg-always-white"], [class*="bg-white"], button[class~="bg-white"] { background-color: {{surface1}} !important; color: {{text}} !important; }
+[class*="text-always-black"], [class*="text-black"] { color: {{text}} !important; }
+[class*="bg-always-black"], [class*="bg-black"] { background-color: {{crust}} !important; color: {{text}} !important; }
