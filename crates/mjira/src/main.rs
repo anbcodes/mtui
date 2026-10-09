@@ -115,6 +115,7 @@ fn main() {
     let mut app = app::App::new(w, h, net, want.or(c.project), c.images);
 
     term::set_mouse(c.mouse);
+    mtui::theme::init("mjira");
     if let Err(e) = term::enable_raw() {
         eprintln!("mjira: cannot enter raw mode: {}", e);
         std::process::exit(1);

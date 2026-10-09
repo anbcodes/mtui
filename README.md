@@ -9,6 +9,7 @@ A small family of fast, low-bandwidth terminal programs written in Rust. They sh
 | [`mgh`](crates/mgh) | A GitHub client: review requests, your PRs and issues, the notification inbox and any repo; a code review view with a file tree, syntax-highlighted diffs and inline comments, a repo code browser; approve, request changes, close, merge | ~1.5 MB |
 | [`mmail`](crates/mmail) | A Fastmail client over JMAP, live-synced with the web client: folders, conversations, search, compose in your editor, drafts, attachments, archive / trash / move / label / star | ~2 MB |
 | [`mjira`](crates/mjira) | A Jira client (Cloud and Server): your issues, favourite filters and JQL search, a project board where `<` `>` move cards through the workflow, issue view with transitions, assign, comment, labels, work logs, attachments inline | ~2 MB |
+| [`mtheme`](crates/mtheme) | Pick a colour theme for each app independently (Classic and the four Evergarden seasons), with a live preview, and switch terminals such as kitty, ghostty and alacritty too. Running apps follow within a second; `Ctrl-T` in any app steps to the next theme, `:theme NAME` in mvi | ~0.4 MB |
 | [`mmd`](crates/mmd) | A markdown renderer: clean printable HTML, a live-reloading browser preview, and scroll sync with mvi (`:mmd`) | ~0.6 MB |
 | [`mtui`](crates/mtui) | The shared terminal library (not a program) | |
 | [`mhttp`](crates/mhttp) | The shared HTTP/1.1 client (not a program) | |
@@ -30,6 +31,7 @@ cargo test
 | `syntax` | Table-driven syntax highlighting, shared by mvi and mgh's code view |
 | `screen` | A double-buffered cell grid. `flush` diffs it against the previous frame and sends only the changed cells in one `write`. Also handles OSC 52 clipboard |
 | `picker` | A generic fuzzy picker (`Picker<T: Label>`) with its keys and bottom-docked drawing. mvi uses it for files, buffers, symbols and grep results; mslack uses it for channels and links, and mgh for repos. It also handles wheel and click |
+| `theme` | Colour themes shared by every app: the apps keep drawing with xterm-256 indices and the theme re-maps greys to its surface/text ramp and hues to its accents (dark shades become tinted backgrounds), keeping 4.5:1 contrast; saved per app in `~/.config/mtui/themes`, polled so running apps switch live |
 | `sidebar` | A scrollable sidebar of rows (tree depth, marks, right-aligned counts, a "current" bar vs. the selection) with divider, scroll state that survives wheel scrolling, and click-to-row mapping. mgh uses it for the review file list and the code tree; mslack for the channel list; mmail for the folder list, and for the open folder's conversations while you read; mjira for the open list's issues while you read one |
 | `lineedit` | A text input with readline keys, history, multi-line text and wrapped drawing |
 | `fuzzy` | Subsequence scoring and filtering |
@@ -51,6 +53,7 @@ crates/mgh/         GitHub client
 crates/mmail/       Fastmail client
 crates/mjira/       Jira client
 crates/mmd/         markdown to HTML, live preview server
+crates/mtheme/      per-app and terminal colour themes
 crates/mhttp/       shared HTTP client
 crates/mimg/        shared image support
 ```

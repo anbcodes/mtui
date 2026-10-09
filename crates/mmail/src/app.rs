@@ -429,6 +429,9 @@ impl App {
     }
 
     pub fn tick(&mut self) -> i32 {
+        if mtui::theme::poll() {
+            self.screen.invalidate();
+        }
         let since = self.last_sync.elapsed();
         if (self.dirty && since >= SYNC_GAP) || (!self.live && self.view.is_some() && since >= POLL) {
             self.sync();

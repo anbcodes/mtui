@@ -2,6 +2,7 @@
 // which keeps redraws cheap over slow links.
 
 use crate::kitty::{self, Placement};
+use crate::theme;
 use std::io::Write;
 
 pub const BOLD: u8 = 1;
@@ -252,10 +253,7 @@ impl Screen {
         }
     }
 
-    fn sgr(out: &mut Vec<u8>, mut st: Style) {
-        if st.fg != 0 && st.bg != 0 {
-            st.fg = legible(st.fg, st.bg);
-        }
+    fn sgr(out: &mut Vec<u8>, st: Style) {
         out.extend_from_slice(b"\x1b[0");
         if st.attr & BOLD != 0 {
             out.extend_from_slice(b";1");
@@ -271,17 +269,28 @@ impl Screen {
         if st.attr & REVERSE != 0 {
             out.extend_from_slice(b";7");
         }
-        for (sel, c) in [(38, st.fg), (48, st.bg)] {
-            if c == 0 {
-                continue;
+        let tc = truecolor();
+        if !tc && theme::is_classic() {
+            // plain palette indices, kept readable
+            let fg = if st.fg != 0 && st.bg != 0 { legible(st.fg, st.bg) } else { st.fg };
+            for (sel, c) in [(38, fg), (48, st.bg)] {
+                if c != 0 {
+                    let _ = write!(out, ";{};5;{}", sel, c);
+                }
             }
-            if c >= 16 && truecolor() {
-                // explicit RGB: some terminals re-derive the 256-colour cube
-                // from their theme, which turns the "black" tag text orange
-                let (r, g, b) = rgb(c);
-                let _ = write!(out, ";{};2;{};{};{}", sel, r as u8, g as u8, b as u8);
-            } else {
-                let _ = write!(out, ";{};5;{}", sel, c);
+        } else {
+            let (fg, bg) = theme::resolve(st.fg, st.bg);
+            for (sel, idx, c) in [(38, st.fg, fg), (48, st.bg, bg)] {
+                let Some((r, g, b)) = c else { continue };
+                if tc && !(theme::is_classic() && (1..16).contains(&idx)) {
+                    // explicit RGB: some terminals re-derive the 256-colour cube
+                    // from their theme, which would turn "black" tag text orange
+                    let _ = write!(out, ";{};2;{};{};{}", sel, r, g, b);
+                } else if theme::is_classic() {
+                    let _ = write!(out, ";{};5;{}", sel, idx);
+                } else {
+                    let _ = write!(out, ";{};5;{}", sel, theme::nearest((r, g, b)));
+                }
             }
         }
         out.push(b'm');

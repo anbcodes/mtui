@@ -11,5 +11,6 @@ pub mod regex;
 pub mod screen;
 pub mod sidebar;
 pub mod syntax;
+pub mod theme;
 pub mod term;
 pub mod wrap;

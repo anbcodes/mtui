@@ -106,6 +106,7 @@ fn main() {
     let mut app = app::App::new(w, h, net, want, images);
 
     term::set_mouse(mouse);
+    mtui::theme::init("mslack");
     if let Err(e) = term::enable_raw() {
         eprintln!("mslack: cannot enter raw mode: {}", e);
         std::process::exit(1);

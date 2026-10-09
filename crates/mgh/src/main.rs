@@ -97,6 +97,7 @@ fn main() {
     let mut app = app::App::new(w, h, net, want.or_else(origin_repo), explicit, images);
 
     term::set_mouse(mouse);
+    mtui::theme::init("mgh");
     if let Err(e) = term::enable_raw() {
         eprintln!("mgh: cannot enter raw mode: {}", e);
         std::process::exit(1);

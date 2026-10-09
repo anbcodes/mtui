@@ -777,6 +777,9 @@ impl App {
     }
 
     pub fn tick(&mut self) -> i32 {
+        if mtui::theme::poll() {
+            self.screen.invalidate();
+        }
         if !self.me.is_empty() && self.last_refresh.elapsed() >= REFRESH {
             self.refresh_all(false);
         }
@@ -862,6 +865,12 @@ impl App {
         }
         if k == Key::Ctrl('l') {
             self.screen.invalidate();
+            return;
+        }
+        if k == Key::Ctrl('t') {
+            let n = mtui::theme::cycle(1);
+            self.screen.invalidate();
+            self.info(format!("theme: {} (Ctrl-T for the next; mtheme sets each app)", n));
             return;
         }
         if k == Key::Ctrl('k') && matches!(self.mode, Mode::Normal) {

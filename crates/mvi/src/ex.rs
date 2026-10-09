@@ -164,7 +164,7 @@ impl Editor {
     fn cmd_complete(&mut self) {
         let Some(sp) = self.cmdline.rfind(' ') else {
             // complete command names
-            let cmds = ["write", "quit", "edit", "enew", "bnext", "bprev", "bdelete", "buffers", "set", "check", "checker", "diag", "grep", "files", "help", "nohlsearch", "preview", "mmd", "registers", "sort", "normal", "global", "substitute", "read", "pwd", "cd", "wall", "qall", "xit"];
+            let cmds = ["write", "quit", "edit", "enew", "bnext", "bprev", "bdelete", "buffers", "set", "check", "checker", "diag", "grep", "files", "help", "nohlsearch", "preview", "mmd", "theme", "registers", "sort", "normal", "global", "substitute", "read", "pwd", "cd", "wall", "qall", "xit"];
             let m: Vec<&str> = cmds.iter().copied().filter(|c| c.starts_with(self.cmdline.as_str())).collect();
             if m.len() == 1 {
                 self.cmdline = m[0].to_string() + " ";
@@ -251,6 +251,32 @@ impl Editor {
             base = Some(base.unwrap_or(cy as isize) + if neg { -n } else { n });
         }
         base.map(|b| b.clamp(0, nl as isize - 1) as usize)
+    }
+
+    /// `:theme` lists, `:theme NAME` picks, `:theme next|prev` cycles. Saved per app.
+    fn theme_command(&mut self, args: &str) {
+        use mtui::theme;
+        let a = args.trim();
+        match a {
+            "" => {
+                let list: Vec<String> = theme::THEMES.iter().enumerate().map(|(i, t)| if i == theme::current() { format!("[{}]", t.id) } else { t.id.to_string() }).collect();
+                self.info(format!("themes: {}  (:theme NAME, Ctrl-T next)", list.join(" ")));
+            }
+            "next" | "prev" => {
+                let n = theme::cycle(if a == "next" { 1 } else { -1 });
+                self.screen.invalidate();
+                self.info(format!("theme: {}", n));
+            }
+            name => match theme::find(name) {
+                Some(i) => {
+                    theme::set(i);
+                    let _ = theme::save("mvi", i);
+                    self.screen.invalidate();
+                    self.info(format!("theme: {}", theme::THEMES[i].name));
+                }
+                None => self.err(format!("unknown theme: {} (:theme lists them)", name)),
+            },
+        }
     }
 
     pub fn ex(&mut self, cmd: &str) {
@@ -565,6 +591,7 @@ impl Editor {
             }
             "md" | "preview" => self.open_preview(),
             "mmd" => self.mmd_command(args),
+            "theme" | "colorscheme" | "colo" => self.theme_command(args),
             "h" | "help" => match self.bufs.iter().position(|b| b.name == "[help]") {
                 Some(i) => self.switch_buf(i),
                 None => {

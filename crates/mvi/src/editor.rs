@@ -2012,6 +2012,7 @@ impl Editor {
             }
             Key::Ctrl('z') => self.suspend = true,
             Key::Ctrl('l') => self.screen.invalidate(),
+            Key::Ctrl('t') => self.ex("theme next"),
             Key::Char('K') => self.show_line_diags(),
             Key::Char('z') => {
                 let th = self.text_h();

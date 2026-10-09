@@ -39,7 +39,7 @@ pub fn run(ed: &mut Editor, input: &mut term::Input) {
     term::set_mouse(ed.opts.mouse);
     loop {
         ed.render();
-        let timeout = if ed.check_running { 100 } else if ed.mmd_active() { 150 } else { -1 };
+        let timeout = if ed.check_running { 100 } else if ed.mmd_active() { 150 } else { 1000 };
         if let Some(k) = input.next_key(timeout) {
             ed.handle_key(k);
             // drain whatever is already buffered before redrawing (paste, fast typing, ssh bursts)
@@ -58,6 +58,9 @@ pub fn run(ed: &mut Editor, input: &mut term::Input) {
         }
         ed.poll_check();
         ed.sync_mmd();
+        if mtui::theme::poll() {
+            ed.screen.invalidate();
+        }
         if ed.suspend {
             ed.suspend = false;
             term::suspend();

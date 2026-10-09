@@ -1,0 +1,9 @@
+[package]
+name = "mtheme"
+version.workspace = true
+edition.workspace = true
+description = "Switch the colour theme of each mtui app, and of terminals like kitty, independently"
+
+[dependencies]
+libc.workspace = true
+mtui.workspace = true

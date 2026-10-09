@@ -106,6 +106,7 @@ fn main() {
     app.external_editor = external_editor;
 
     term::set_mouse(mouse);
+    mtui::theme::init("mmail");
     if let Err(e) = term::enable_raw() {
         eprintln!("mmail: cannot enter raw mode: {}", e);
         std::process::exit(1);

@@ -145,6 +145,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtheme"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mtui",
+]
+
+[[package]]
 name = "mtui"
 version = "0.1.0"
 dependencies = [

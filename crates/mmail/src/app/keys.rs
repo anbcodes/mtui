@@ -18,6 +18,12 @@ impl App {
             self.screen.invalidate();
             return;
         }
+        if k == Key::Ctrl('t') {
+            let n = mtui::theme::cycle(1);
+            self.screen.invalidate();
+            self.info(format!("theme: {} (Ctrl-T for the next; mtheme sets each app)", n));
+            return;
+        }
         if matches!(self.mode, Mode::Edit(..)) {
             return self.edit_key(k);
         }

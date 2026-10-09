@@ -71,6 +71,7 @@ fn main() {
         ed.set_cursor((y, 0));
     }
 
+    mtui::theme::init("mvi");
     if let Err(e) = term::enable_raw() {
         eprintln!("mvi: cannot enter raw mode: {}", e);
         std::process::exit(1);

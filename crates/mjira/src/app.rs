@@ -769,6 +769,9 @@ impl App {
     }
 
     pub fn tick(&mut self) -> i32 {
+        if mtui::theme::poll() {
+            self.screen.invalidate();
+        }
         if !self.me.is_empty() && self.last_refresh.elapsed() >= REFRESH {
             self.refresh_all();
         }
