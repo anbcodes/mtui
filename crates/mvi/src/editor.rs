@@ -2144,6 +2144,18 @@ impl Editor {
             _ => None,
         };
         if let Some(op) = op {
+            // `.` redoes this on the same amount of text: as many characters
+            // on one line, else as many lines
+            let ver = (self.cur, self.bb().version);
+            let mut again = if self.mode == Mode::Visual && t.a.0 == t.b.0 {
+                let l = &self.bb().lines[t.a.0];
+                let e = next_boundary(l, t.b.1.min(l.len()));
+                let chars = l[t.a.1.min(e)..e].chars().count().max(1);
+                std::iter::once(Key::Char('v')).chain(std::iter::repeat(Key::Char('l')).take(chars - 1)).collect::<Vec<_>>()
+            } else {
+                std::iter::once(Key::Char('V')).chain(std::iter::repeat(Key::Char('j')).take(t.b.0 - t.a.0)).collect::<Vec<_>>()
+            };
+            again.extend(keys.iter().cloned());
             exit(self);
             if matches!(op, Op::Indent | Op::Dedent) {
                 self.indent_lines(t.a.0, t.b.0, op == Op::Dedent, n);
@@ -2151,6 +2163,13 @@ impl Editor {
                 self.set_cursor((t.a.0, x));
             } else {
                 self.apply_op(op, t, reg);
+            }
+            if !self.replaying {
+                if self.mode == Mode::Insert {
+                    self.dot_rec = Some(again);
+                } else if ver != (self.cur, self.bb().version) {
+                    self.dot = again;
+                }
             }
             if self.mode == Mode::Normal {
                 self.after_change();
@@ -2906,5 +2925,30 @@ mod format_tests {
     fn comment_leader_is_kept() {
         let (t, _) = run("    // one two three four five six", 20, "gww");
         assert_eq!(t, "    // one two three\n    // four five six");
+    }
+}
+
+#[cfg(test)]
+mod dot_tests {
+    use super::*;
+
+    fn run(text: &str, keys: &str) -> String {
+        let mut e = Editor::new(80, 24);
+        e.b().lines = text.split('\n').map(String::from).collect();
+        for c in keys.chars() {
+            e.handle_key(Key::Char(c));
+        }
+        e.bb().lines.join("\n")
+    }
+
+    #[test]
+    fn dot_repeats_a_visual_indent_on_as_many_lines() {
+        let out = run("a\nb\nc\nd\ne", "Vj>3j.");
+        assert_eq!(out, "    a\n    b\nc\n    d\n    e");
+    }
+
+    #[test]
+    fn dot_repeats_a_charwise_visual_delete() {
+        assert_eq!(run("abcdef", "vld."), "ef");
     }
 }
