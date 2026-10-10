@@ -1,6 +1,6 @@
 # m* — tiny terminal tools
 
-A small family of fast, low-bandwidth terminal programs written in Rust. They share a support crate (`mtui`, libc only). `mvi` needs nothing else (and is also a library, which mmail embeds); `mslack`, `mgh`, `mmail` and `mjira` also use `mhttp`, a small HTTP client over rustls, and `mimg` for inline images.
+A small family of fast, low-bandwidth terminal programs written in Rust. They share a support crate (`mtui`, libc only). `mvi` needs nothing else (and is also a library, which mmail embeds); `mslack`, `mgh`, `mmail`, `mjira` and `msql` also use `mhttp`, a small HTTP client over rustls, and `mimg` for inline images.
 
 | Tool | What it is | Size |
 |---|---|---|
@@ -9,6 +9,7 @@ A small family of fast, low-bandwidth terminal programs written in Rust. They sh
 | [`mgh`](crates/mgh) | A GitHub client: review requests, your PRs and issues, the notification inbox and any repo; a code review view with a file tree, syntax-highlighted diffs and inline comments, a repo code browser; approve, request changes, close, merge | ~1.5 MB |
 | [`mmail`](crates/mmail) | A Fastmail client over JMAP, live-synced with the web client: folders, conversations, search, compose in your editor, drafts, attachments, archive / trash / move / label / star | ~2 MB |
 | [`mjira`](crates/mjira) | A Jira client (Cloud and Server): your issues, favourite filters and JQL search, a project board where `<` `>` move cards through the workflow, issue view with transitions, assign, comment, labels, work logs, attachments inline | ~2 MB |
+| [`msql`](crates/msql) | A SQL client: write queries in mvi with completion from the database's schema (tables after `FROM`, `alias.` columns, functions), save them, run them and browse the results. Cloudflare D1 (and local SQLite files) | ~2 MB |
 | [`mtheme`](crates/mtheme) | Pick a colour theme for each app independently (Classic and the four Evergarden seasons), with a live preview, and switch terminals such as kitty, ghostty and alacritty, and Firefox, too. Running apps follow within a second; `Ctrl-T` in any app steps to the next theme, `:theme NAME` in mvi | ~0.4 MB |
 | [`mmd`](crates/mmd) | A markdown renderer: clean printable HTML, a live-reloading browser preview, and scroll sync with mvi (`:mmd`) | ~0.6 MB |
 | [`mtui`](crates/mtui) | The shared terminal library (not a program) | |
@@ -52,6 +53,7 @@ crates/mslack/      Slack client
 crates/mgh/         GitHub client
 crates/mmail/       Fastmail client
 crates/mjira/       Jira client
+crates/msql/        SQL client (Cloudflare D1, SQLite)
 crates/mmd/         markdown to HTML, live preview server
 crates/mtheme/      per-app and terminal colour themes
 crates/mhttp/       shared HTTP client

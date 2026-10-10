@@ -1,0 +1,11 @@
+[package]
+name = "msql"
+version.workspace = true
+edition.workspace = true
+description = "A tiny SQL client for the terminal: write queries in mvi with schema-aware completion, save them, run them on Cloudflare D1"
+
+[dependencies]
+libc.workspace = true
+mtui.workspace = true
+mhttp.workspace = true
+mvi.workspace = true
