@@ -306,3 +306,20 @@ html, body, .light, .dark, .prose, .markdown {
 .markdown, .prose, [data-message-author-role], [data-message-author-role] p, [data-message-author-role] li, [data-message-author-role] h1, [data-message-author-role] h2, [data-message-author-role] h3, [data-message-author-role] strong { color: {{text}} !important; }
 .markdown a, .prose a { color: {{blue}} !important; }
 .markdown :not(pre) > code, .prose :not(pre) > code { background-color: {{surface1}} !important; color: {{text}} !important; border-color: {{surface2}} !important; }
+
+/* Tailwind utilities the site hard-codes (no variable behind them): they leave light text on a
+   white panel in menus and popovers, and black links, once the neutrals above are themed. */
+.bg-white, .bg-gray-50, .bg-gray-100, [class~="bg-white"], [class*="bg-white/"] { background-color: {{surface0}} !important; }
+.text-black, .text-gray-900, .text-gray-800, .text-gray-700 { color: {{text}} !important; }
+.text-gray-600, .text-gray-500 { color: {{subtext0}} !important; }
+.border-gray-100, .border-gray-200, .border-gray-300 { border-color: {{surface2}} !important; }
+[role="menu"], [role="listbox"], [role="dialog"], [data-radix-popper-content-wrapper] > * {
+  background-color: {{mantle}} !important;
+  color: {{text}} !important;
+  border-color: {{surface2}} !important;
+}
+[role="menuitem"], [role="option"] { color: {{text}} !important; }
+[role="menuitem"]:hover, [role="menuitem"][data-highlighted], [role="option"][data-highlighted] { background-color: {{surface1}} !important; }
+a, a:visited { color: inherit; }
+main a:not([class*="btn"]), .markdown a, .prose a, [data-message-author-role] a { color: {{blue}} !important; }
+a.cursor-pointer.underline, .underline { text-decoration-color: {{alpha text 0.4}}; }

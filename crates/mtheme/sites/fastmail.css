@@ -176,3 +176,14 @@
   --ui-quote-color-fg-5: {{mix aqua text 0.35}} !important;
   --ui-quote-color-bg-5: {{mix base aqua 0.15}} !important;
 }
+
+/* Email bodies keep the sender's own colours. Text that inherits the page colour but sits on a
+   sender-painted white panel would turn light-on-white, so it gets dark text instead. */
+[class*="Message-body"] :is(
+  [bgcolor="#fff" i], [bgcolor="#ffffff" i], [bgcolor="white" i],
+  [style*="background-color:#fff" i], [style*="background-color: #fff" i],
+  [style*="background:#fff" i], [style*="background: #fff" i],
+  [style*="background-color:white" i], [style*="background-color: white" i],
+  [style*="background:white" i], [style*="background: white" i],
+  [style*="background-color: rgb(255, 255, 255)" i], [style*="background: rgb(255, 255, 255)" i]
+) { color: #1d1d1d; }
