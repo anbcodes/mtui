@@ -2,6 +2,7 @@ mod app;
 mod backend;
 mod config;
 mod d1;
+mod postgres;
 mod schema;
 mod sql;
 mod sqlite;
@@ -14,6 +15,8 @@ use std::sync::Arc;
 fn usage() -> ! {
     println!(
         "usage: msql d1 [DATABASE]
+       msql postgres [URL]     PostgreSQL through psql: a postgres:// URL or conninfo string,
+                               else `postgres …` in ~/.config/msql/config, $DATABASE_URL, or the PG* variables
        msql sqlite FILE        a local SQLite file (needs the sqlite3 command)
 
 Write SQL in mvi with completion from the database's schema, save queries and
@@ -48,13 +51,15 @@ fn main() {
     let (kind, rest) = match args.first().map(String::as_str) {
         Some("d1") => ("d1", &args[1..]),
         Some("sqlite") => ("sqlite", &args[1..]),
+        Some("postgres") | Some("pg") => ("postgres", &args[1..]),
         None => ("d1", &args[..]),
         Some(other) => {
-            eprintln!("msql: unknown backend {} (supported: d1, sqlite)", other);
+            eprintln!("msql: unknown backend {} (supported: d1, postgres, sqlite)", other);
             std::process::exit(1);
         }
     };
     let backend: Arc<dyn backend::Backend> = match kind {
+        "postgres" => Arc::new(postgres::Postgres::from_args(rest.first().cloned())),
         "sqlite" => match rest.first() {
             Some(p) => Arc::new(sqlite::Sqlite { path: p.clone() }),
             None => {

@@ -721,7 +721,7 @@ impl App {
         let mut v = Vec::new();
         for (i, t) in s.tables.iter().enumerate() {
             v.push((i, None));
-            if self.open.contains(&t.name) {
+            if self.open.contains(&t.full_name()) {
                 v.extend((0..t.columns.len()).map(|c| (i, Some(c))));
             }
         }
@@ -735,7 +735,7 @@ impl App {
         let name_of = |app: &App, (t, c): (usize, Option<usize>)| {
             let s = app.schema.read().unwrap();
             let t = &s.tables[t];
-            sql::ident(&c.map_or(t.name.clone(), |c| t.columns[c].name.clone()))
+            c.map_or_else(|| sql::qualified(t), |c| sql::ident(&t.columns[c].name))
         };
         match k {
             Key::Char('j') | Key::Down => self.tree_sel = (self.tree_sel + 1).min(n.saturating_sub(1)),
@@ -746,7 +746,7 @@ impl App {
             Key::Ctrl('u') | Key::PageUp => self.tree_sel = self.tree_sel.saturating_sub(10),
             Key::Enter | Key::Char(' ') | Key::Char('l') | Key::Right => match cur {
                 Some((t, None)) => {
-                    let name = self.schema.read().unwrap().tables[t].name.clone();
+                    let name = self.schema.read().unwrap().tables[t].full_name();
                     if !self.open.remove(&name) {
                         self.open.insert(name);
                     }
@@ -759,7 +759,7 @@ impl App {
             },
             Key::Char('h') | Key::Left => {
                 if let Some((t, _)) = cur {
-                    let name = self.schema.read().unwrap().tables[t].name.clone();
+                    let name = self.schema.read().unwrap().tables[t].full_name();
                     self.open.remove(&name);
                     self.tree_sel = self.tree_rows().iter().position(|r| *r == (t, None)).unwrap_or(0);
                 }
@@ -772,7 +772,7 @@ impl App {
             }
             Key::Char('p') => {
                 if let Some((t, _)) = cur {
-                    let name = sql::ident(&self.schema.read().unwrap().tables[t].name);
+                    let name = sql::qualified(&self.schema.read().unwrap().tables[t]);
                     self.run_sql(format!("SELECT * FROM {} LIMIT 100;", name));
                 }
             }
@@ -956,9 +956,9 @@ impl App {
             let t = &s.tables[ti];
             match ci {
                 None => {
-                    let open = self.open.contains(&t.name);
+                    let open = self.open.contains(&t.full_name());
                     let x = self.screen.puts(1, y, if open { "▾ " } else { "▸ " }, Style::new(FG_DIM, bg, 0), sw);
-                    let x = self.screen.puts(x, y, &clip(&t.name, sw.saturating_sub(x + 1)), Style::new(C_OK, bg, if t.view { mtui::screen::ITALIC } else { BOLD }), sw);
+                    let x = self.screen.puts(x, y, &clip(&t.full_name(), sw.saturating_sub(x + 1)), Style::new(C_OK, bg, if t.view { mtui::screen::ITALIC } else { BOLD }), sw);
                     let n = format!(" {}", t.columns.len());
                     self.screen.puts(x, y, &n, Style::new(FG_DIM, bg, 0), sw);
                 }

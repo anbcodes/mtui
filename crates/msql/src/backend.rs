@@ -52,7 +52,7 @@ pub trait Backend: Send + Sync {
             Err(_) => self.schema_by_table()?,
         };
         let t = |r: &Vec<crate::backend::Val>, i: usize| r.get(i).map(|v| v.text.clone()).unwrap_or_default();
-        Ok(Schema::from_rows(rows.iter().map(|r| (t(r, 0), t(r, 1) == "view", t(r, 2), t(r, 3), t(r, 4) == "1", t(r, 5).parse::<u32>().unwrap_or(0) > 0))))
+        Ok(Schema::from_rows(rows.iter().map(|r| (String::new(), t(r, 0), t(r, 1) == "view", t(r, 2), t(r, 3), t(r, 4) == "1", t(r, 5).parse::<u32>().unwrap_or(0) > 0))))
     }
 
     /// The same rows as the joined query, one PRAGMA per table, for servers

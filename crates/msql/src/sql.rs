@@ -83,6 +83,9 @@ pub fn lex(src: &str) -> Vec<Tok> {
             }
             out.push(Tok { t: if c == '\'' { T::Str } else { T::Quoted(name) }, s, e: at(j), open });
             i = j;
+        } else if let Some((end, open)) = dollar_quoted(src, s) {
+            out.push(Tok { t: T::Str, s, e: end, open });
+            i = b.iter().position(|x| x.0 >= end).unwrap_or(b.len());
         } else if c.is_ascii_digit() {
             let mut j = i;
             while j < b.len() && (b[j].1.is_ascii_alphanumeric() || b[j].1 == '.') {
@@ -110,6 +113,17 @@ pub fn lex(src: &str) -> Vec<Tok> {
         }
     }
     out
+}
+
+/// End of a Postgres dollar-quoted string ($$ … $$ or $tag$ … $tag$) starting at `s`, and whether it is unterminated.
+fn dollar_quoted(src: &str, s: usize) -> Option<(usize, bool)> {
+    let rest = &src[s..];
+    let tag_end = rest[1..].find('$')? + 2;
+    let tag = &rest[..tag_end];
+    if !rest[1..tag_end - 1].chars().all(|c| c.is_alphabetic() || c == '_') {
+        return None;
+    }
+    Some(rest[tag_end..].find(tag).map_or((src.len(), true), |k| (s + tag_end + k + tag.len(), false)))
 }
 
 fn kw(t: &Tok) -> Option<String> {
@@ -371,6 +385,15 @@ pub fn ident(name: &str) -> String {
     }
 }
 
+/// A table as it must be written: `"sales"."orders"` outside the default schema.
+pub fn qualified(t: &Table) -> String {
+    if t.schema.is_empty() {
+        ident(&t.name)
+    } else {
+        format!("{}.{}", ident(&t.schema), ident(&t.name))
+    }
+}
+
 fn col_detail(t: &Table, c: &crate::schema::Column) -> String {
     let mut s = format!("{}.{}", t.name, c.name);
     if !c.ty.is_empty() {
@@ -391,6 +414,8 @@ enum Want {
     Start,
     /// A table or view name.
     Table,
+    /// A table in this schema (`sales.|`).
+    TableIn(String),
     /// The columns of these tables only (`u.`, `INSERT INTO t (`).
     Columns(Vec<String>),
     /// An expression: columns in scope, functions, keywords.
@@ -399,6 +424,8 @@ enum Want {
 
 struct Cand {
     text: String,
+    /// What the typed prefix is matched against, when not the text.
+    key: String,
     kind: Kind,
     detail: String,
     group: i32,
@@ -442,6 +469,7 @@ pub fn complete(schema: &Schema, lines: &[String], cur: (usize, usize), manual: 
         dotted = true;
         match before.len().checked_sub(2).and_then(|i| name_of(before[i])) {
             Some(q) if matches!(q.to_ascii_lowercase().as_str(), "main" | "temp") && resolve(q).is_none() => Want::Table,
+            Some(q) if resolve(q).is_none() && schema.tables.iter().any(|t| t.schema.eq_ignore_ascii_case(q)) => Want::TableIn(q.to_string()),
             Some(q) => Want::Columns(resolve(q).map(|t| vec![t.name.clone()]).unwrap_or_default()),
             None => return None,
         }
@@ -487,8 +515,8 @@ pub fn complete(schema: &Schema, lines: &[String], cur: (usize, usize), manual: 
 
     // when to pop up on its own
     let min = match want {
-        Want::Columns(_) if dotted => 0,
-        Want::Table | Want::Columns(_) => 1,
+        Want::Columns(_) | Want::TableIn(_) if dotted => 0,
+        Want::Table | Want::TableIn(_) | Want::Columns(_) => 1,
         _ => 2,
     };
     if !manual && prefix.chars().count() < min {
@@ -501,28 +529,30 @@ pub fn complete(schema: &Schema, lines: &[String], cur: (usize, usize), manual: 
     let lower = !prefix.is_empty() && !prefix.chars().any(|c| c.is_uppercase());
     let case = |w: &str| if lower { w.to_ascii_lowercase() } else { w.to_string() };
     let mut cands: Vec<Cand> = Vec::new();
-    let table_cands = |cands: &mut Vec<Cand>, group: i32| {
-        for t in &schema.tables {
-            cands.push(Cand { text: ident(&t.name), kind: Kind::Table, detail: format!("{} · {} columns", if t.view { "view" } else { "table" }, t.columns.len()), group });
+    let table_cands = |cands: &mut Vec<Cand>, group: i32, only: Option<&str>| {
+        for t in schema.tables.iter().filter(|t| only.map_or(true, |s| t.schema.eq_ignore_ascii_case(s))) {
+            let text = if only.is_some() { ident(&t.name) } else { qualified(t) };
+            cands.push(Cand { key: t.name.clone(), text, kind: Kind::Table, detail: format!("{} · {} columns", if t.view { "view" } else { "table" }, t.columns.len()), group });
         }
         for (a, t) in &sc {
             if t.is_empty() && !schema.tables.iter().any(|x| x.name == *a) {
-                cands.push(Cand { text: ident(a), kind: Kind::Table, detail: "subquery / CTE".into(), group });
+                cands.push(Cand { key: String::new(), text: ident(a), kind: Kind::Table, detail: "subquery / CTE".into(), group });
             }
         }
     };
     let col_cands = |cands: &mut Vec<Cand>, t: &Table, group: i32| {
         for c in &t.columns {
-            cands.push(Cand { text: ident(&c.name), kind: Kind::Column, detail: col_detail(t, c), group });
+            cands.push(Cand { key: String::new(), text: ident(&c.name), kind: Kind::Column, detail: col_detail(t, c), group });
         }
     };
     match &want {
         Want::Start => {
             for k in KEYWORDS.iter().filter(|k| matches!(**k, "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "CREATE" | "DROP" | "ALTER" | "WITH" | "PRAGMA" | "EXPLAIN" | "BEGIN" | "COMMIT" | "ROLLBACK" | "VACUUM" | "ANALYZE" | "REPLACE")) {
-                cands.push(Cand { text: case(k), kind: Kind::Keyword, detail: String::new(), group: 100 });
+                cands.push(Cand { key: String::new(), text: case(k), kind: Kind::Keyword, detail: String::new(), group: 100 });
             }
         }
-        Want::Table => table_cands(&mut cands, 100),
+        Want::Table => table_cands(&mut cands, 100, None),
+        Want::TableIn(sch) => table_cands(&mut cands, 100, Some(sch)),
         Want::Columns(ts) => {
             for t in ts.iter().filter_map(|n| schema.find(n)) {
                 col_cands(&mut cands, t, 100);
@@ -537,20 +567,20 @@ pub fn complete(schema: &Schema, lines: &[String], cur: (usize, usize), manual: 
                         col_cands(&mut cands, t, 100);
                     }
                     if !a.eq_ignore_ascii_case(&t.name) {
-                        cands.push(Cand { text: ident(a), kind: Kind::Table, detail: format!("alias of {}", t.name), group: 80 });
+                        cands.push(Cand { key: String::new(), text: ident(a), kind: Kind::Table, detail: format!("alias of {}", t.name), group: 80 });
                     }
                 }
             }
             for (a, tn) in &sc {
                 if schema.find(tn).is_some() && a.eq_ignore_ascii_case(tn) {
-                    cands.push(Cand { text: ident(a), kind: Kind::Table, detail: "table in this query".into(), group: 80 });
+                    cands.push(Cand { key: String::new(), text: ident(a), kind: Kind::Table, detail: "table in this query".into(), group: 80 });
                 }
             }
             for (name, sig) in FUNCTIONS {
-                cands.push(Cand { text: format!("{}(", case(name)), kind: Kind::Symbol, detail: sig.to_string(), group: 60 });
+                cands.push(Cand { key: String::new(), text: format!("{}(", case(name)), kind: Kind::Symbol, detail: sig.to_string(), group: 60 });
             }
             for k in KEYWORDS {
-                cands.push(Cand { text: case(k), kind: Kind::Keyword, detail: String::new(), group: 50 });
+                cands.push(Cand { key: String::new(), text: case(k), kind: Kind::Keyword, detail: String::new(), group: 50 });
             }
             if sc.is_empty() {
                 // nothing to scope to yet (SELECT before FROM): offer every column, then the tables
@@ -558,14 +588,14 @@ pub fn complete(schema: &Schema, lines: &[String], cur: (usize, usize), manual: 
                     col_cands(&mut cands, t, 70);
                 }
             }
-            table_cands(&mut cands, 10);
+            table_cands(&mut cands, 10, None);
         }
     }
 
     let lp = prefix.to_lowercase();
     let mut scored: Vec<(i32, Cand)> = Vec::new();
     for c in cands {
-        let bare = c.text.trim_matches('"').trim_end_matches('(');
+        let bare = if c.key.is_empty() { c.text.trim_matches('"').trim_end_matches('(') } else { c.key.as_str() };
         if bare.eq_ignore_ascii_case(prefix) && !prefix.is_empty() && c.kind != Kind::Symbol {
             continue;
         }
@@ -615,7 +645,7 @@ mod tests {
                 ("orders", false, "total", "REAL", false, false),
                 ("order", false, "x", "", false, false),
             ]
-            .map(|(t, v, c, ty, n, p)| (t.to_string(), v, c.to_string(), ty.to_string(), n, p)),
+            .map(|(t, v, c, ty, n, p)| (String::new(), t.to_string(), v, c.to_string(), ty.to_string(), n, p)),
         )
     }
 
@@ -705,6 +735,24 @@ mod tests {
         // quoted names complete, quotes and all
         let r = at("select \"em| from users", false);
         assert_eq!(r.first().map(String::as_str), Some("\"email\""));
+    }
+
+    #[test]
+    fn schemas_and_dollar_quotes() {
+        let mut sc = schema();
+        sc.tables.push(Table { schema: "sales".into(), name: "invoices".into(), view: false, columns: vec![] });
+        let go = |text: &str| {
+            let off = text.find('|').unwrap();
+            let src = text.replace('|', "");
+            complete(&sc, &[src], (0, off), false).map(|c| c.items.into_iter().map(|i| i.text).collect::<Vec<_>>()).unwrap_or_default()
+        };
+        // outside the default schema a table is written with its schema
+        assert_eq!(go("select * from inv|").first().map(String::as_str), Some("sales.invoices"));
+        assert_eq!(go("select * from sales.i|"), ["invoices"]);
+        let f = "create function f() returns int as $$ select 1; select 2; $$ language sql; select 3";
+        assert_eq!(statements(f).len(), 2);
+        assert!(go("select $$ us|").is_empty());
+        assert_eq!(statements("select $1, $a$ ; $a$"), ["select $1, $a$ ; $a$"]);
     }
 
     #[test]

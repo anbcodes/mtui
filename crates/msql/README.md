@@ -1,11 +1,12 @@
 # msql — write, save and run SQL against your database
 
-`msql` is a terminal SQL client built around [`mvi`](../mvi): you write queries in the real editor (an embedded `mvi::Pane`), with completion that knows the database's schema, keep them as files, and run them against the database. The first backend is **Cloudflare D1**; local SQLite files work too.
+`msql` is a terminal SQL client built around [`mvi`](../mvi): you write queries in the real editor (an embedded `mvi::Pane`), with completion that knows the database's schema, keep them as files, and run them against the database. Backends: **Cloudflare D1**, **PostgreSQL** (through `psql`) and local SQLite files.
 
 ```sh
 cargo build --release -p msql
 export CLOUDFLARE_API_TOKEN=…        # a token with the "D1 Edit" permission
 msql d1 my-database                  # or just `msql d1` inside a project with a wrangler.toml
+msql postgres postgres://user@host/db   # needs the psql command
 msql sqlite app.db                   # a local file (needs the sqlite3 command)
 ```
 
@@ -18,6 +19,10 @@ msql sqlite app.db                   # a local file (needs the sqlite3 command)
 | Database | the argument (a name, a wrangler binding, or an id), `d1 NAME` in the config, the only database in the nearest `wrangler.toml`/`wrangler.json[c]`, or the only one in the account |
 
 Queries go to D1's REST API (`…/d1/database/{id}/raw`), which keeps duplicate column names and the column names of empty results. Integers beyond 2⁵³ lose precision (the shared JSON parser holds numbers as `f64`).
+
+## Connecting to PostgreSQL
+
+`msql postgres [URL]` runs your statements through `psql`, so whatever libpq accepts works: a `postgres://` URL, a conninfo string (`host=… dbname=…`), a service name, or nothing at all and the `PG*` variables. Without an argument msql uses `postgres …` in `~/.config/msql/config`, then `$DATABASE_URL`. It never prompts for a password (put it in the URL, `$PGPASSWORD` or `~/.pgpass`) and never shows one in the title bar. A run is one psql session, so `BEGIN; …; COMMIT;` in one run works; each run starts fresh. Results come back as CSV, so numbers are recognised by their look (a value like `0123` stays text). Tables outside `public` (or the current schema) appear and complete as `schema.table`, and `sales.|` completes that schema's tables. `$$ … $$` bodies are not split at their semicolons. Completion's function list is SQLite's for now.
 
 ## The screen
 
