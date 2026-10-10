@@ -604,6 +604,7 @@ impl Editor {
                 }
             },
             "ft" | "filetype" | "syntax" | "syn" => self.set(&format!("ft={}", args)),
+            _ if self.host_names.iter().any(|n| n == name) => self.host_cmds.push(if args.is_empty() { name.to_string() } else { format!("{} {}", name, args) }),
             _ => self.err(format!("unknown command: {}", name)),
         }
     }

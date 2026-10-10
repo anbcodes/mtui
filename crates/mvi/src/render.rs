@@ -339,6 +339,8 @@ impl Editor {
                         crate::complete::Kind::Symbol => 75,
                         crate::complete::Kind::Keyword => 176,
                         crate::complete::Kind::Path => 180,
+                        crate::complete::Kind::Table => 114,
+                        crate::complete::Kind::Column => 110,
                         _ => FG_DIM,
                     };
                     self.screen.puts(sx + 1, y, it.kind.tag(), Style::new(tag_c, bg, 0), sx + pw);

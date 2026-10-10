@@ -139,6 +139,12 @@ pub struct Editor {
     macros: HashMap<char, Vec<Key>>,
     last_macro: char,
     pub comp: Option<Completion>,
+    /// A host's completion source; replaces the built-in word completion.
+    pub provider: Option<complete::Provider>,
+    /// Ex commands a host handles itself: unknown commands whose name is
+    /// listed here are queued in `host_cmds` (as typed) instead of failing.
+    pub host_names: Vec<String>,
+    pub host_cmds: Vec<String>,
     sym_cache: Option<HashMap<String, String>>,
     pub picker: Option<Picker>,
     pub preview: Option<crate::preview::Preview>,
@@ -346,6 +352,9 @@ impl Editor {
             last_macro: 'q',
             comp: None,
             sym_cache: None,
+            provider: None,
+            host_names: Vec::new(),
+            host_cmds: Vec::new(),
             picker: None,
             preview: None,
             live: None,
@@ -2527,7 +2536,7 @@ impl Editor {
 
     fn update_completion(&mut self, manual: bool) {
         let (cy, cx) = self.cursor();
-        if !manual {
+        if !manual && self.provider.is_none() {
             let l = &self.bb().lines[cy];
             let ws = complete::word_start(l, cx, false);
             let ps = complete::word_start(l, cx, true);
@@ -2536,11 +2545,15 @@ impl Editor {
                 return;
             }
         }
-        if self.sym_cache.is_none() {
-            self.sym_cache = Some(complete::symbol_table(&self.bufs));
-        }
         let old_sel = self.comp.as_ref().and_then(|c| c.sel.map(|s| c.items[s].text.clone()));
-        self.comp = complete::complete(&self.bufs[self.cur], cy, cx, manual, self.sym_cache.as_ref().unwrap());
+        if let Some(p) = &self.provider {
+            self.comp = p(&self.bufs[self.cur].lines, (cy, cx), manual);
+        } else {
+            if self.sym_cache.is_none() {
+                self.sym_cache = Some(complete::symbol_table(&self.bufs));
+            }
+            self.comp = complete::complete(&self.bufs[self.cur], cy, cx, manual, self.sym_cache.as_ref().unwrap());
+        }
         if let (Some(c), Some(t)) = (&mut self.comp, old_sel) {
             c.sel = c.items.iter().position(|i| i.text == t);
         }

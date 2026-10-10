@@ -12,6 +12,8 @@ pub enum Kind {
     Word,
     Keyword,
     Path,
+    Table,
+    Column,
 }
 
 impl Kind {
@@ -21,6 +23,8 @@ impl Kind {
             Kind::Word => "w",
             Kind::Keyword => "k",
             Kind::Path => "/",
+            Kind::Table => "T",
+            Kind::Column => "c",
         }
     }
 }
@@ -30,6 +34,11 @@ pub struct Item {
     pub kind: Kind,
     pub detail: String,
 }
+
+/// A host program's own completion source: the buffer's lines, the cursor
+/// (line, byte column) and whether completion was asked for explicitly.
+/// `None` means nothing to offer.
+pub type Provider = Box<dyn Fn(&[String], (usize, usize), bool) -> Option<Completion>>;
 
 pub struct Completion {
     pub items: Vec<Item>,
