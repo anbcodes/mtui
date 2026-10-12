@@ -40,6 +40,9 @@ pub const F_BANG_MACRO: u32 = 64; // ident!
 pub const F_RUST_ATTR: u32 = 128; // #[...]
 pub const F_KEYS: u32 = 256; // key: / key = (yaml/toml)
 pub const F_INDENT_COLON: u32 = 512; // python-style block start
+pub const F_QMACRO: u32 = 1024; // ?MACRO (erlang)
+pub const F_CHAR_LIT: u32 = 2048; // $c character literal (erlang)
+pub const F_DASH_ATTR: u32 = 4096; // -attribute at the start of a line (erlang)
 
 const fn lang(name: &'static str) -> Lang {
     Lang {
@@ -272,6 +275,23 @@ static LANGS: &[Lang] = &[
         ..lang("zig")
     },
     Lang {
+        exts: &["erl", "hrl", "escript"],
+        files: &["rebar.config", "rebar.config.script", "sys.config"],
+        line_comment: "%",
+        strings: &[("\"", "\"", true), ("'", "'", false)],
+        keywords: &[
+            "after", "and", "andalso", "band", "begin", "bnot", "bor", "bsl", "bsr", "bxor", "case", "catch", "cond", "div", "else", "end", "fun", "if", "let", "maybe", "not", "of", "or", "orelse", "receive", "rem", "try", "when", "xor",
+        ],
+        types: &[
+            "any", "atom", "binary", "bitstring", "boolean", "byte", "char", "float", "integer", "iodata", "iolist", "neg_integer", "no_return", "non_neg_integer", "none", "nonempty_list", "number", "pid", "pos_integer", "reference", "term", "timeout", "tuple",
+        ],
+        consts: &["true", "false", "undefined"],
+        check: &["erlc -Wall -o /tmp {file}"],
+        indent: 4,
+        flags: F_QMACRO | F_CHAR_LIT | F_DASH_ATTR,
+        ..lang("erlang")
+    },
+    Lang {
         exts: &["html", "htm", "xml", "svg", "vue", "svelte"],
         block: ("<!--", "-->"),
         strings: &[("\"", "\"", false), ("'", "'", false)],
@@ -330,7 +350,7 @@ pub fn detect(path: &Path, first_line: &str) -> &'static Lang {
         }
     }
     if let Some(sb) = first_line.strip_prefix("#!") {
-        for (k, n) in [("python", "python"), ("bash", "sh"), ("/sh", "sh"), ("zsh", "sh"), ("node", "javascript"), ("ruby", "ruby"), ("lua", "lua")] {
+        for (k, n) in [("python", "python"), ("bash", "sh"), ("/sh", "sh"), ("zsh", "sh"), ("node", "javascript"), ("ruby", "ruby"), ("lua", "lua"), ("escript", "erlang")] {
             if sb.contains(k) {
                 return by_name(n).unwrap_or(&PLAIN);
             }
@@ -525,6 +545,35 @@ pub fn highlight(lang: &Lang, line: &str, mut st: State, out: &mut Vec<u8>) -> S
             i = j;
             continue;
         }
+        if f & F_CHAR_LIT != 0 && c == b'$' && i + 1 < n {
+            // $c, $\n, $\x41: a character literal, never a string opener
+            let mut e = i + 1;
+            if b[e] == b'\\' && e + 1 < n {
+                e += 1;
+            }
+            e += line[e..].chars().next().map_or(1, |ch| ch.len_utf8());
+            out[i..e].fill(NUMBER);
+            i = e;
+            continue;
+        }
+        if f & F_QMACRO != 0 && c == b'?' && i + 1 < n && (is_ident(b[i + 1]) || b[i + 1] == b'?') {
+            let mut j = i + 1;
+            while j < n && (is_ident(b[j]) || b[j] == b'?') {
+                j += 1;
+            }
+            out[i..j].fill(MACRO);
+            i = j;
+            continue;
+        }
+        if f & F_DASH_ATTR != 0 && c == b'-' && line[..i].trim().is_empty() && i + 1 < n && b[i + 1].is_ascii_lowercase() {
+            let mut j = i + 1;
+            while j < n && is_ident(b[j]) {
+                j += 1;
+            }
+            out[i..j].fill(MACRO);
+            i = j;
+            continue;
+        }
         if f & F_RUST_ATTR != 0 && c == b'#' && (starts(i, "#[") || starts(i, "#![")) {
             let j = line[i..].find(']').map_or(n, |k| i + k + 1);
             out[i..j].fill(MACRO);
@@ -580,5 +629,41 @@ pub fn style(k: u8) -> crate::screen::Style {
         MACRO => Style::fg(73),
         HEADING => Style::new(75, 0, BOLD),
         _ => Style::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hl(line: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        highlight(by_name("erlang").unwrap(), line, State::Normal, &mut out);
+        out
+    }
+
+    #[test]
+    fn erlang_detect() {
+        assert_eq!(detect(Path::new("a/foo.erl"), "").name, "erlang");
+        assert_eq!(detect(Path::new("a/foo.hrl"), "").name, "erlang");
+        assert_eq!(detect(Path::new("rebar.config"), "").name, "erlang");
+        assert_eq!(detect(Path::new("run"), "#!/usr/bin/env escript").name, "erlang");
+    }
+
+    #[test]
+    fn erlang_tokens() {
+        let h = hl("-module(foo).");
+        assert!(h[..7].iter().all(|&k| k == MACRO));
+        let h = hl("X = ?MODULE, % note");
+        assert_eq!(h[4], MACRO);
+        assert_eq!(h[13], COMMENT);
+        // $" must not open a string
+        let h = hl("C = $\", ok");
+        assert_eq!(&h[4..6], &[NUMBER, NUMBER]);
+        assert_eq!(h[8], NORMAL);
+        let h = hl("case X of foo(1) -> 'a b'; _ -> \"s\" end");
+        assert_eq!(h[0], KEYWORD);
+        assert_eq!(h[10], FUNC);
+        assert_eq!(h[20], STRING);
     }
 }

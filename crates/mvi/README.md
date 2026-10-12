@@ -26,7 +26,7 @@ cargo build --release -p mvi
 |---|---|
 | Editing | Normal/insert/visual/visual-line modes, operators `d c y > < gc gu gU g~` with motions, counts and text objects (`iw aw i( a{ i" ip …`), registers (`"a`–`"z`, append with `"A`, `"0`, `"_`, `"+`), `.` repeat, macros (`q`/`@`), marks, undo/redo, `Ctrl-A`/`Ctrl-X`, auto-indent, bracket auto-dedent |
 | Search | Built-in regex engine (PCRE-style subset with captures and smartcase), incremental search, highlighting, `* # n N`, `:s` with `\1` and `&`, `:g`/`:v` |
-| Syntax | Table-driven highlighter with per-line state caching. Supports Rust, C, C++, Python, JS/TS, Go, shell, JSON, TOML, YAML, Markdown, Lua, Java/Kotlin/C#/Swift, Ruby, Zig, HTML/XML, CSS and SQL, plus Makefile and Dockerfile |
+| Syntax | Table-driven highlighter with per-line state caching. Supports Rust, C, C++, Python, JS/TS, Go, shell, JSON, TOML, YAML, Markdown, Lua, Java/Kotlin/C#/Swift, Ruby, Zig, Erlang, HTML/XML, CSS and SQL, plus Makefile and Dockerfile |
 | Diagnostics | Runs the language's checker in a background thread on save (or with `:check` / `<space>c`). Shows gutter signs, underlines and inline messages. `]d [d ]e [e` jump through them, `K` shows the full text, `<space>d` lists them, `]q [q` work across files |
 | Completion | Pops up as you type. Sources are buffer words (ranked by distance from the cursor), symbols from all open buffers (with the definition line as a signature hint), language keywords, and file paths. Use `Tab`/`Ctrl-N`/`Ctrl-P` to select and `Enter` to accept |
 | Navigation | `<space>f` fuzzy file finder (respects simple `.gitignore` entries), `<space>b` buffers, `<space>s` symbols in the current file, `<space>/` or `:grep` for a project regex search, `gd` goto definition (current buffer → open buffers → project), `gf` to open the file under the cursor |
@@ -46,7 +46,7 @@ Each language has an ordered list of checker commands. `mvi` uses the first one 
 | python | `ruff check --output-format=concise`, otherwise a syntax check with Python's `ast` module |
 | js / ts | `tsc --noEmit` (if there is a `tsconfig.json`), otherwise `node --check` |
 | go | `go vet ./...` (in the `go.mod` root), otherwise `gofmt -e` |
-| others | sh: `shellcheck -f gcc` or `bash -n` · json: `json.tool` or `jq` · lua: `luac -p` · ruby: `ruby -wc` · zig: `zig ast-check` · java: `javac` |
+| others | sh: `shellcheck -f gcc` or `bash -n` · json: `json.tool` or `jq` · lua: `luac -p` · ruby: `ruby -wc` · zig: `zig ast-check` · erlang: `erlc -Wall` · java: `javac` |
 
 The output parser understands these formats:
 
