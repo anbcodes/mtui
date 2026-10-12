@@ -132,6 +132,10 @@ pub struct Editor {
     pub last_vis: Option<(Pos, Pos, Mode)>,
     last_find: Option<(char, char)>,
     pub last_jump: Pos,
+    /// Positions jumped away from (buffer, position), walked by the mouse
+    /// back/forward buttons. `jump_idx == jumps.len()` means "at the head".
+    jumps: Vec<(usize, Pos)>,
+    jump_idx: usize,
     dot: Vec<Key>,
     dot_rec: Option<Vec<Key>>,
     replaying: bool,
@@ -344,6 +348,8 @@ impl Editor {
             last_vis: None,
             last_find: None,
             last_jump: (0, 0),
+            jumps: Vec::new(),
+            jump_idx: 0,
             dot: Vec::new(),
             dot_rec: None,
             replaying: false,
@@ -923,7 +929,7 @@ impl Editor {
             M::FileStart | M::FileEnd => {
                 let y = if has_count { n.saturating_sub(1).min(nl - 1) } else if matches!(m, M::FileStart) { 0 } else { nl - 1 };
                 let x = fnb(&b.lines[y]);
-                self.last_jump = cur;
+                self.note_jump(cur);
                 t((y, x), TK::Line)
             }
             M::Column => t((cy, byte_at_disp(l, n.saturating_sub(1), self.opts.tabstop)), TK::Excl),
@@ -956,7 +962,7 @@ impl Editor {
                 // find first bracket at or after cursor on this line
                 let off = l[cx..].find(|c: char| "()[]{}".contains(c))?;
                 let p = self.match_pair((cy, cx + off))?;
-                self.last_jump = cur;
+                self.note_jump(cur);
                 t(p, TK::Incl)
             }
             M::ParaF | M::ParaB => {
@@ -1019,7 +1025,7 @@ impl Editor {
                     self.info("only match");
                     return None;
                 }
-                self.last_jump = cur;
+                self.note_jump(cur);
                 if (fwd && p < cur) || (!fwd && p > cur) {
                     self.info("search wrapped");
                 }
@@ -1043,7 +1049,7 @@ impl Editor {
                     'a'..='z' => b.marks[c as usize - 'a' as usize]?,
                     _ => return None,
                 };
-                self.last_jump = cur;
+                self.note_jump(cur);
                 let p = (p.0.min(nl - 1), p.1);
                 if exact {
                     t(p, TK::Excl)
@@ -1585,7 +1591,59 @@ impl Editor {
                 self.set_cursor(p);
             }
             MouseKind::Release => self.drag_from = None,
+            MouseKind::Back if self.mode == Mode::Normal => self.jump_back(),
+            MouseKind::Forward if self.mode == Mode::Normal => self.jump_forward(),
             _ => {}
+        }
+    }
+
+    // ---------- jump history ----------
+
+    /// Record the position about to be jumped away from: sets the `''` mark
+    /// and appends to the history the mouse back/forward buttons walk.
+    fn note_jump(&mut self, from: Pos) {
+        self.last_jump = from;
+        self.jumps.truncate(self.jump_idx);
+        let ent = (self.cur, from);
+        if self.jumps.last().map_or(true, |l| l.0 != ent.0 || l.1 .0 != ent.1 .0) {
+            self.jumps.push(ent);
+        } else if let Some(l) = self.jumps.last_mut() {
+            *l = ent;
+        }
+        self.jump_idx = self.jumps.len();
+    }
+
+    fn goto_jump(&mut self, i: usize) {
+        let (bi, p) = self.jumps[i];
+        self.jump_idx = i;
+        self.switch_buf(bi);
+        self.set_cursor(p);
+        self.clamp();
+        let th = self.text_h();
+        let b = self.b();
+        if b.cy < b.top || b.cy >= b.top + th {
+            b.top = b.cy.saturating_sub(th / 2);
+        }
+    }
+
+    pub fn jump_back(&mut self) {
+        if self.jump_idx >= self.jumps.len() {
+            if self.jumps.is_empty() {
+                return;
+            }
+            // leaving the head: remember where we are so forward returns here
+            let here = (self.cur, self.cursor());
+            self.jumps.push(here);
+            self.jump_idx = self.jumps.len() - 1;
+        }
+        if self.jump_idx > 0 {
+            self.goto_jump(self.jump_idx - 1);
+        }
+    }
+
+    pub fn jump_forward(&mut self) {
+        if self.jump_idx + 1 < self.jumps.len() {
+            self.goto_jump(self.jump_idx + 1);
         }
     }
 
@@ -2616,6 +2674,13 @@ impl Editor {
 
     pub fn close_buf(&mut self, i: usize) {
         self.bufs.remove(i);
+        self.jumps.retain(|j| j.0 != i);
+        for j in &mut self.jumps {
+            if j.0 > i {
+                j.0 -= 1;
+            }
+        }
+        self.jump_idx = self.jump_idx.min(self.jumps.len());
         if self.bufs.is_empty() {
             self.bufs.push(Buffer::new(None));
             self.cur = 0;
@@ -2659,7 +2724,7 @@ impl Editor {
         }
         match cands.into_iter().find(|p| p.is_file()) {
             Some(p) => {
-                self.last_jump = (cy, cx);
+                self.note_jump((cy, cx));
                 self.open_file(&p);
             }
             None => self.err(format!("no file: {}", name)),
@@ -2677,7 +2742,7 @@ impl Editor {
             if let Some((_, ln, _)) = syms.iter().find(|s| s.0 == w && (bi != self.cur || s.1 != here.0)) {
                 let col = b.lines[*ln].find(w.as_str()).unwrap_or(0);
                 let ln = *ln;
-                self.last_jump = here;
+                self.note_jump(here);
                 self.switch_buf(bi);
                 self.set_cursor((ln, col));
                 return;
@@ -2698,7 +2763,7 @@ impl Editor {
         match items.len() {
             0 => self.err(format!("no definition found: {}", w)),
             1 => {
-                self.last_jump = here;
+                self.note_jump(here);
                 self.open_pick(items[0].clone());
             }
             _ => self.picker = Some(Picker::new(&format!("definitions of {}", w), items)),
@@ -2780,7 +2845,7 @@ impl Editor {
                 self.picker = None;
                 if let Some(it) = it {
                     let c = self.cursor();
-                    self.last_jump = c;
+                    self.note_jump(c);
                     self.open_pick(it);
                 }
             }
@@ -2978,5 +3043,32 @@ mod dot_tests {
     #[test]
     fn dot_repeats_a_charwise_visual_delete() {
         assert_eq!(run("abcdef", "vld."), "ef");
+    }
+
+    #[test]
+    fn mouse_back_and_forward_walk_the_jump_history() {
+        let mut e = Editor::new(80, 24);
+        e.b().lines = (0..50).map(|i| i.to_string()).collect();
+        let click = |e: &mut Editor, kind| e.handle_key(Key::Mouse(Mouse { kind, x: 0, y: 0 }));
+        click(&mut e, MouseKind::Back); // empty history: nothing happens
+        assert_eq!(e.cursor().0, 0);
+        e.handle_key(Key::Char('G'));
+        assert_eq!(e.cursor().0, 49);
+        e.handle_key(Key::Char('2'));
+        e.handle_key(Key::Char('0'));
+        e.handle_key(Key::Char('G'));
+        assert_eq!(e.cursor().0, 19);
+        click(&mut e, MouseKind::Back);
+        assert_eq!(e.cursor().0, 49);
+        click(&mut e, MouseKind::Back);
+        assert_eq!(e.cursor().0, 0);
+        click(&mut e, MouseKind::Back); // at the oldest entry
+        assert_eq!(e.cursor().0, 0);
+        click(&mut e, MouseKind::Forward);
+        assert_eq!(e.cursor().0, 49);
+        click(&mut e, MouseKind::Forward);
+        assert_eq!(e.cursor().0, 19);
+        click(&mut e, MouseKind::Forward); // back at the head
+        assert_eq!(e.cursor().0, 19);
     }
 }

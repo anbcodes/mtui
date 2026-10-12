@@ -176,6 +176,10 @@ pub enum MouseKind {
     Release,
     WheelUp,
     WheelDown,
+    /// The "back" side button (xterm button 8).
+    Back,
+    /// The "forward" side button (xterm button 9).
+    Forward,
 }
 
 /// A mouse event at a 0-based screen cell.
@@ -405,6 +409,8 @@ fn parse_sgr_mouse(p: &str, release: bool) -> Key {
     let kind = match (b & !(4 | 8 | 16), release) {
         (64, _) => MouseKind::WheelUp,
         (65, _) => MouseKind::WheelDown,
+        (128, false) => MouseKind::Back,
+        (129, false) => MouseKind::Forward,
         (_, true) => MouseKind::Release,
         (b, false) if b < 3 => MouseKind::Press(b as u8),
         (b, false) if b & 32 != 0 && b & 3 < 3 => MouseKind::Drag((b & 3) as u8),
@@ -425,5 +431,8 @@ mod tests {
         assert_eq!(parse_sgr_mouse("16;3;3", false), Key::Mouse(Mouse { kind: MouseKind::Press(0), x: 2, y: 2 }));
         assert_eq!(parse_sgr_mouse("32;3;3", false), Key::Mouse(Mouse { kind: MouseKind::Drag(0), x: 2, y: 2 }));
         assert_eq!(parse_sgr_mouse("35;3;3", false), Key::Esc);
+        assert_eq!(parse_sgr_mouse("128;3;3", false), Key::Mouse(Mouse { kind: MouseKind::Back, x: 2, y: 2 }));
+        assert_eq!(parse_sgr_mouse("129;3;3", false), Key::Mouse(Mouse { kind: MouseKind::Forward, x: 2, y: 2 }));
+        assert_eq!(parse_sgr_mouse("128;3;3", true), Key::Mouse(Mouse { kind: MouseKind::Release, x: 2, y: 2 }));
     }
 }
