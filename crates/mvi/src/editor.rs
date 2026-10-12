@@ -2078,6 +2078,8 @@ impl Editor {
                 }
             }
             Key::Ctrl('z') => self.suspend = true,
+            Key::Ctrl('o') => self.jump_back(),
+            Key::Tab => self.jump_forward(), // Ctrl-I
             Key::Ctrl('l') => self.screen.invalidate(),
             Key::Ctrl('t') => self.ex("theme next"),
             Key::Char('K') => self.show_line_diags(),
@@ -3069,6 +3071,10 @@ mod dot_tests {
         click(&mut e, MouseKind::Forward);
         assert_eq!(e.cursor().0, 19);
         click(&mut e, MouseKind::Forward); // back at the head
+        assert_eq!(e.cursor().0, 19);
+        e.handle_key(Key::Ctrl('o'));
+        assert_eq!(e.cursor().0, 49);
+        e.handle_key(Key::Tab);
         assert_eq!(e.cursor().0, 19);
     }
 }
