@@ -41,7 +41,7 @@ Search takes plain words (matched anywhere in the message) and narrowing terms: 
 
 While a conversation is open, the folder's conversations become the sidebar (the current one is marked): `J`/`K` move through them without going back to the list, and `Tab` focuses the sidebar so `j`/`k` do the same. Attached PNG and JPEG images show inline in terminals with the kitty graphics protocol (kitty, ghostty, WezTerm; `MTUI_IMAGES=1` forces it, `images off` in the config disables it). Images that an HTML message would fetch from other servers are *not* loaded (that is how senders learn you opened a message); `I` loads them for that message.
 
-The mouse works everywhere: click a folder or a row (double-click opens), click an image to see it fullscreen (any key or click closes it), click a message header to expand or collapse it, an attachment to save it, the links line to pick a link; the wheel scrolls whatever is under it. In the list the first columns are buttons: `✓` marks, `●` toggles read, `★` stars; right-click marks a row.
+The mouse works everywhere: click a folder or a row (double-click opens), click an image to see it fullscreen (any key or click closes it), click a message header to expand or collapse it, an attachment to save it, the links line to pick a link; the wheel scrolls whatever is under it, and dragging the sidebar's edge resizes it. In the list the first columns are buttons: `✓` marks, `●` toggles read, `★` stars; right-click marks a row.
 
 ## Writing
 

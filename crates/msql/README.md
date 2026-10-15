@@ -40,7 +40,7 @@ A schema tree on the left, the editor above, the results below. The schema is ca
 
 **Queries.** The buffer is a file (`scratch.sql`, to begin with) in `~/.local/share/msql/<database>/queries/`. `:w` saves it, `:save NAME` keeps it under a name and switches to it, `:open [NAME]` picks one (fuzzy), `:new [NAME]`, `:rm NAME`. msql reopens the last one.
 
-**Moving.** `Alt-h` schema, `Alt-j` results, `Alt-k`/`Alt-l` editor (or `Ctrl-W h`/`j` in normal mode). `:schema` hides or shows the tree, `:refresh` reloads it. The mouse works: click to focus, click a table to open or close its columns, wheel to scroll.
+**Moving.** `Alt-h` schema, `Alt-j` results, `Alt-k`/`Alt-l` editor (or `Ctrl-W h`/`j` in normal mode). `:schema` hides or shows the tree, `:refresh` reloads it. The mouse works: click to focus, click a table to open or close its columns, wheel to scroll, drag the schema's edge or the Results bar to resize.
 
 **Results.** `h j k l`, `g G 0 $`, `Ctrl-D`/`Ctrl-U`; `Enter` opens the row with one column per line and long values wrapped (`n`/`p` for the next/previous row); `y` copies the cell and `Y` the row (OSC 52, so it works over ssh); `:export out.csv|tsv|json` writes the whole result. NULLs are dim, numbers right-aligned. Errors from the database are shown in full.
 

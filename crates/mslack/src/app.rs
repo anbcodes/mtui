@@ -195,6 +195,7 @@ pub struct App {
     rows_cache: Vec<usize>,
     pending_g: bool,
     sidebar: bool,
+    side_div: mtui::divider::Divider,
     msg: String,
     err: bool,
     inflight: HashSet<String>,
@@ -295,6 +296,7 @@ impl App {
             rows_cache: Vec::new(),
             pending_g: false,
             sidebar: true,
+            side_div: Default::default(),
             msg: "connecting…".into(),
             err: false,
             inflight: HashSet::new(),
@@ -1421,6 +1423,9 @@ impl App {
                 return;
             }
         }
+        if self.geo.side_w > 0 && self.side_div.mouse(m.kind, m.x, self.geo.side_w) {
+            return;
+        }
         let g = &self.geo;
         let in_side = m.x < g.side_w;
         let in_comp = m.y >= g.y_comp && m.y < g.y_comp + g.comp_rows && !in_side;
@@ -1605,7 +1610,7 @@ impl App {
             self.screen.flush(None);
             return;
         }
-        let side_w = if self.sidebar && w >= 60 { (w / 5).clamp(16, 28) } else { 0 };
+        let side_w = if self.sidebar && w >= 60 { self.side_div.size((w / 5).clamp(16, 28), 10, w - 30) } else { 0 };
         let x0 = if side_w > 0 { side_w + 1 } else { 0 };
         let pw = w - x0;
 

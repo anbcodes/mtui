@@ -394,6 +394,9 @@ impl App {
 
     pub(super) fn code_mouse(&mut self, m: Mouse) {
         let side = self.side;
+        if side.w > 0 && self.side_div.mouse(m.kind, m.x, side.w) {
+            return;
+        }
         let on_side = side.w > 0 && m.x <= side.w;
         let b = &mut self.code;
         match m.kind {
@@ -446,7 +449,7 @@ impl App {
         } else if b.hide_side {
             (0, true)
         } else {
-            ((w / 4).clamp(24, 40), true)
+            (self.side_div.size((w / 4).clamp(24, 40), 12, w - 30), true)
         };
         let x0 = if side_w > 0 && show_code { side_w + 1 } else { 0 };
         if side_w > 0 {

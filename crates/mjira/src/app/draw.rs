@@ -550,7 +550,7 @@ impl App {
         let (key, head, mut scroll) = (d.key.clone(), d.head.clone(), d.scroll);
         let view_h = bottom.saturating_sub(1);
 
-        let side_w = if self.side_on && w >= 80 { (w / 4).clamp(24, 36) } else { 0 };
+        let side_w = if self.side_on && w >= 80 { self.side_div.size((w / 4).clamp(24, 36), 12, w - 40) } else { 0 };
         if side_w > 0 {
             let nav = self.nav();
             let items = &self.lists[self.tab].items;

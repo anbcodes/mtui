@@ -568,6 +568,9 @@ impl App {
 
     pub(super) fn review_mouse(&mut self, m: Mouse) {
         let side = self.side;
+        if side.w > 0 && self.side_div.mouse(m.kind, m.x, side.w) {
+            return;
+        }
         let Some(d) = &mut self.detail else { return };
         let on_side = side.w > 0 && m.x <= side.w;
         match m.kind {
@@ -756,7 +759,7 @@ impl App {
             return;
         }
         let h = bottom.saturating_sub(1);
-        let side_w = if !rev.hide_side && w >= 80 { (w / 4).clamp(22, 34) } else { 0 };
+        let side_w = if !rev.hide_side && w >= 80 { self.side_div.size((w / 4).clamp(22, 34), 12, w - 40) } else { 0 };
         let x0 = if side_w > 0 { side_w + 1 } else { 0 };
 
         if side_w > 0 {

@@ -318,6 +318,9 @@ impl App {
     }
 
     fn mouse(&mut self, m: Mouse) {
+        if self.side.w > 0 && self.side_div.mouse(m.kind, m.x, self.side.w) {
+            return;
+        }
         if m.kind == MouseKind::Press(0) {
             if let Some(k) = self.screen.image_at(m.x, m.y).and_then(|id| self.gallery.key_of(id)) {
                 self.mode = Mode::Image(k.to_string());

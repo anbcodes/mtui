@@ -44,6 +44,6 @@ One column per status of the project, in workflow order (to do, in progress, don
 
 `t` `a` `i` `p` `o` `y` also work on the selected issue in any list or on the board. What you write is sent as Jira text: blank lines separate paragraphs, `- ` and `1. ` lines make lists, ``` fences make code blocks, and `**bold**`, `` `code` ``, `[text](url)` and bare links become formatting. Enter sends, Alt-Enter adds a line, Esc cancels.
 
-Descriptions and comments are shown as markdown. Image attachments are shown inline in terminals with the kitty graphics protocol (kitty, ghostty, WezTerm; `MTUI_IMAGES=1` forces it, `images off` disables it), fetched with your credentials; click one to see it fullscreen. Changes to a status or assignee show on screen immediately and are replaced by the server's answer on the next refresh, including an error if Jira refused (a transition that needs a required field says so).
+Descriptions and comments are shown as markdown. Image attachments are shown inline in terminals with the kitty graphics protocol (kitty, ghostty, WezTerm; `MTUI_IMAGES=1` forces it, `images off` disables it), fetched with your credentials; click one to see it fullscreen. Drag the issue list's edge to resize it. Changes to a status or assignee show on screen immediately and are replaced by the server's answer on the next refresh, including an error if Jira refused (a transition that needs a required field says so).
 
 Press `?` for every key.

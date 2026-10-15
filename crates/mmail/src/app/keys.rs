@@ -398,6 +398,10 @@ impl App {
     // ---- mouse ----
 
     fn mouse(&mut self, m: Mouse) {
+        let w = self.geo.side.w;
+        if w > 0 && self.side_div[self.thread.is_some() as usize].mouse(m.kind, m.x, w) {
+            return;
+        }
         // the sidebar: folders, or the conversations while one is open
         if self.geo.side.contains(m.x) && m.y >= 1 {
             let thread = self.thread.is_some();

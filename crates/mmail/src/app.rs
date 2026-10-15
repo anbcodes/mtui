@@ -210,6 +210,8 @@ pub struct App {
     pub(crate) focus: Focus,
     pub(crate) side_sel: usize,
     pub(crate) show_side: bool,
+    /// Drag the sidebar's edge: [folders, conversations while a thread is open].
+    pub(crate) side_div: [mtui::divider::Divider; 2],
     pub(crate) side_st: sidebar::State,
     pub(crate) tside_st: sidebar::State,
     pub(crate) gallery: mimg::Gallery,
@@ -263,6 +265,7 @@ impl App {
             focus: Focus::List,
             side_sel: 0,
             show_side: w >= 80,
+            side_div: Default::default(),
             side_st: Default::default(),
             tside_st: Default::default(),
             gallery: mimg::Gallery::new(images),

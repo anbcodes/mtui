@@ -100,6 +100,7 @@ The interface is modal, like vim. You start in normal mode and browse; `i` opens
 | click the composer | start typing, with the cursor where you clicked |
 | click the header | leave a thread |
 | click in a picker | choose that item (clicking above it cancels) |
+| drag the sidebar's edge | resize it |
 
 While mouse capture is on, select text with Shift+drag (Option+drag in some macOS terminals). To turn the mouse off, add `mouse off` to the config file.
 

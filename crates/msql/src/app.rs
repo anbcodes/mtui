@@ -6,6 +6,7 @@ use crate::backend::{Backend, Kind, Output, ResultSet};
 use crate::config;
 use crate::schema::Schema;
 use crate::sql;
+use mtui::divider::Divider;
 use mtui::picker::{Pick, Picker};
 use mtui::screen::{char_width, Screen};
 use mtui::term::{Key, MouseKind, Waker};
@@ -80,6 +81,9 @@ pub struct App {
     focus: Focus,
     win: bool,
     show_schema: bool,
+    /// Drag the schema's right edge / the Results bar to resize.
+    side_div: Divider,
+    edit_div: Divider,
     open: HashSet<String>,
     tree_sel: usize,
     tree_top: usize,
@@ -214,6 +218,8 @@ impl App {
             focus: Focus::Editor,
             win: false,
             show_schema: true,
+            side_div: Divider::default(),
+            edit_div: Divider::default(),
             open: HashSet::new(),
             tree_sel: 0,
             tree_top: 0,
@@ -248,9 +254,9 @@ impl App {
     /// (schema width, main x, main width, editor height)
     fn layout(&self) -> (usize, usize, usize, usize) {
         let (w, h) = (self.screen.w, self.screen.h);
-        let sw = if self.show_schema && w >= 70 { (w / 4).clamp(24, 38) } else { 0 };
+        let sw = if self.show_schema && w >= 70 { self.side_div.size((w / 4).clamp(24, 38), 12, w - 40) } else { 0 };
         let mx = if sw > 0 { sw + 1 } else { 0 };
-        let eh = ((h - 1) * 2 / 5).max(6).min(h.saturating_sub(6));
+        let eh = self.edit_div.size(((h - 1) * 2 / 5).max(6), 3, h.saturating_sub(5));
         (sw, mx, w - mx, eh)
     }
 
@@ -792,6 +798,9 @@ impl App {
 
     fn mouse(&mut self, m: mtui::term::Mouse) {
         let (sw, mx, _mw, eh) = self.layout();
+        if (sw > 0 && self.side_div.mouse(m.kind, m.x, sw)) || (m.x >= mx && self.edit_div.mouse(m.kind, m.y.saturating_sub(1), eh)) {
+            return;
+        }
         let in_editor = m.x >= mx && m.y >= 1 && m.y < 1 + eh;
         let in_results = m.x >= mx && m.y >= 1 + eh;
         let in_schema = sw > 0 && m.x < sw && m.y >= 1;

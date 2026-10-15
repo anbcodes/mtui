@@ -92,7 +92,7 @@ impl App {
         self.draw_bar();
         self.screen.set_images(Vec::new());
         let thread = self.thread.is_some();
-        let mut side_w = if !self.show_side { 0 } else if thread { (w / 3).clamp(28, 42) } else { (w / 4).clamp(16, 30) };
+        let mut side_w = if !self.show_side { 0 } else if thread { self.side_div[1].size((w / 3).clamp(28, 42), 12, w - 40) } else { self.side_div[0].size((w / 4).clamp(16, 30), 10, w - 40) };
         if w < side_w + 40 {
             side_w = 0;
         }

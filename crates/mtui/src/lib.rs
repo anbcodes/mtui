@@ -1,6 +1,7 @@
 //! Shared plumbing for the m* terminal tools. Depends only on `libc`.
 
 pub mod base64;
+pub mod divider;
 pub mod fuzzy;
 pub mod json;
 pub mod kitty;
