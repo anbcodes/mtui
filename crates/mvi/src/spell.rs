@@ -693,7 +693,26 @@ impl Speller {
         false
     }
 
-    /// Problems on one line (`md`: markdown syntax is skipped).
+    /// Problems in a paragraph (its lines, joined by newlines in the hit
+    /// offsets). Cached on the lines' text, so unchanged paragraphs cost a
+    /// hash per line.
+    pub fn block(&mut self, lines: &[String], md: bool) -> Rc<[Hit]> {
+        if lines.len() == 1 {
+            return self.line(&lines[0], md);
+        }
+        let mut key = md as u64;
+        for l in lines {
+            key = (key ^ line_hash(l.as_bytes())).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(17);
+        }
+        if let Some(h) = self.cache.get(&key) {
+            return h.clone();
+        }
+        let h: Rc<[Hit]> = self.scan(&lines.join("\n"), md).into();
+        self.cache.insert(key, h.clone());
+        h
+    }
+
+    /// Problems in one line (or any text; `md`: markdown syntax is skipped).
     pub fn line(&mut self, line: &str, md: bool) -> Rc<[Hit]> {
         let key = line_hash(line.as_bytes()) ^ md as u64;
         if let Some(h) = self.cache.get(&key) {
@@ -1039,6 +1058,11 @@ pub fn prose_lines(lines: &[String], kind: Kind) -> Vec<bool> {
     if kind == Kind::Text {
         return out;
     }
+    for (i, l) in lines.iter().enumerate() {
+        if is_ref_definition(l) {
+            out[i] = false;
+        }
+    }
     let mut prev_blank = true;
     let mut in_list = false;
     let mut indented_code = false;
@@ -1119,6 +1143,45 @@ pub fn prose_lines(lines: &[String], kind: Kind) -> Vec<bool> {
                 out[i] = false;
             }
         }
+    }
+    out
+}
+
+/// A markdown line that can't continue the paragraph above it: headings,
+/// list items, table rows, rules, HTML and the start of a quote.
+fn block_start(l: &str, prev: &str) -> bool {
+    let t = l.trim_start();
+    let p = prev.trim_start();
+    let rule = |t: &str| t.len() >= 3 && (t.chars().all(|c| c == '-' || c == ' ') || t.chars().all(|c| c == '=' || c == ' ') || t.chars().all(|c| c == '*' || c == ' ') || t.chars().all(|c| c == '_' || c == ' '));
+    let list = |t: &str| {
+        let d = t.bytes().take_while(|b| b.is_ascii_digit()).count();
+        t.starts_with("- ") || t.starts_with("* ") || t.starts_with("+ ") || (d > 0 && (t[d..].starts_with(". ") || t[d..].starts_with(") ")))
+    };
+    t.starts_with('#') || p.starts_with('#') || t.starts_with('|') || p.starts_with('|') || t.starts_with('<') || rule(t) || rule(p) || list(t) || t.starts_with('>') != p.starts_with('>')
+}
+
+/// Paragraphs: runs of prose lines (as line ranges) checked together, so a
+/// problem can span a line break. Blank lines and non-prose lines end them,
+/// and so do markdown block starts; very long runs are cut.
+pub fn blocks(lines: &[String], kind: Kind) -> Vec<(usize, usize)> {
+    let prose = prose_lines(lines, kind);
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, l) in lines.iter().enumerate() {
+        let ok = prose[i] && !l.trim().is_empty();
+        if let Some(a) = start {
+            let cut = !ok || i - a >= 64 || (kind == Kind::Markdown && block_start(l, &lines[i - 1]));
+            if cut {
+                out.push((a, i));
+                start = None;
+            }
+        }
+        if ok && start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(a) = start {
+        out.push((a, lines.len()));
     }
     out
 }
@@ -1474,14 +1537,17 @@ const REPEAT_OK: &[&str] = &["blah", "bla", "that", "had", "is", "bye", "no", "h
 fn grammar(line: &str, toks: &[Tok], skip: &[(usize, usize)], known: &dyn Fn(&str) -> bool, out: &mut Vec<Hit>) {
     let b = line.as_bytes();
     let gap = |i: usize| -> &str { &line[if i == 0 { 0 } else { toks[i - 1].e }..toks[i].s] };
-    let adjacent = |i: usize| i > 0 && !gap(i).is_empty() && gap(i).chars().all(|c| c == ' ' || c == '\t');
+    // only spaces between, and at most one line break (a paragraph's lines)
+    let adjacent = |i: usize| i > 0 && !gap(i).is_empty() && gap(i).chars().all(|c| c == ' ' || c == '\t' || c == '\n') && gap(i).matches('\n').count() <= 1;
     let word = |t: &Tok| !t.code && t.lower.chars().all(|c| c.is_alphabetic() || c == '\'' || c == '-');
     let fix_case = |orig: &str, fix: &str| if orig.chars().next().map_or(false, |c| c.is_uppercase()) { title(fix) } else { fix.to_string() };
     for (i, t) in toks.iter().enumerate() {
         let text = &line[t.s..t.e];
         // doubled words
         if adjacent(i) && word(t) && t.lower == toks[i - 1].lower && !REPEAT_OK.contains(&t.lower.as_str()) {
-            out.push(Hit { s: toks[i - 1].e, e: t.e, grammar: true, msg: format!("repeated word \"{}\"", text), fixes: vec![String::new()] });
+            // across a line break: drop the second one (and its space), keep the break
+            let (s, e) = if gap(i).contains('\n') { (t.s, t.e + line[t.e..].len() - line[t.e..].trim_start_matches(' ').len()) } else { (toks[i - 1].e, t.e) };
+            out.push(Hit { s, e, grammar: true, msg: format!("repeated word \"{}\"", text), fixes: vec![String::new()] });
             continue;
         }
         // a / an
@@ -1509,7 +1575,7 @@ fn grammar(line: &str, toks: &[Tok], skip: &[(usize, usize)], known: &dyn Fn(&st
         // a sentence starts with a capital
         if i > 0 && word(t) && text.chars().next().map_or(false, |c| c.is_lowercase()) {
             let g = gap(i);
-            let core = g.trim_end_matches([' ', '\t']);
+            let core = g.trim_end_matches([' ', '\t', '\n']);
             let ends = core.trim_end_matches(['"', '\'', '”', '’', ')', '*', '_']);
             let prev = &toks[i - 1];
             if core.len() < g.len()
@@ -1598,13 +1664,41 @@ fn ext_of(b: &crate::buffer::Buffer) -> String {
     b.path.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
 }
 
+/// A problem as the editor keeps it: the part on one line (`line`, `s..e`)
+/// of a problem that runs from `from` to `to` (a grammar problem may span a
+/// line break; then each line gets an entry and the later ones are `cont`).
+#[derive(Clone)]
+pub struct Issue {
+    pub line: usize,
+    pub s: usize,
+    pub e: usize,
+    pub cont: bool,
+    pub from: (usize, usize),
+    pub to: (usize, usize),
+    hits: Rc<[Hit]>,
+    k: usize,
+}
+
+impl Issue {
+    pub fn hit(&self) -> &Hit {
+        &self.hits[self.k]
+    }
+    pub fn grammar(&self) -> bool {
+        self.hit().grammar
+    }
+    fn covers(&self, x: usize) -> bool {
+        x >= self.s && x < self.e.max(self.s + 1)
+    }
+}
+
 impl Editor {
     pub fn spell_active(&self) -> bool {
         let b = self.bb();
         b.spell_on.unwrap_or(self.opts.spell && prose(b))
     }
 
-    /// Recheck the current buffer if it changed (cheap: lines are cached).
+    /// Recheck the current buffer if it changed (cheap: paragraphs are
+    /// cached).
     pub fn refresh_spell(&mut self) {
         if !self.spell_active() {
             let b = self.b();
@@ -1624,32 +1718,57 @@ impl Editor {
         }
         let md = b.lang.name == "markdown";
         let kind = if md { Kind::Markdown } else if ext_of(b) == "eml" { Kind::Mail } else { Kind::Text };
-        let prose = prose_lines(&b.lines, kind);
-        b.spell.clear();
-        for (i, l) in b.lines.iter().enumerate() {
-            if prose[i] && !l.is_empty() {
-                for h in sp.line(l, md).iter() {
-                    b.spell.push((i, h.clone()));
+        let mut out = Vec::new();
+        let mut starts = Vec::new();
+        for (a, z) in blocks(&b.lines, kind) {
+            let ls = &b.lines[a..z];
+            let hits = sp.block(ls, md);
+            if hits.is_empty() {
+                continue;
+            }
+            starts.clear();
+            let mut off = 0;
+            for l in ls {
+                starts.push(off);
+                off += l.len() + 1;
+            }
+            let at = |p: usize| {
+                let k = starts.partition_point(|&s| s <= p) - 1;
+                (k, p - starts[k])
+            };
+            for (k, h) in hits.iter().enumerate() {
+                let (l1, s1) = at(h.s);
+                let (l2, last) = at(h.e.max(h.s + 1) - 1);
+                let (from, to) = ((a + l1, s1), (a + l2, if l1 == l2 { h.e - starts[l1] } else { last + 1 }));
+                let mut first = true;
+                for l in l1..=l2 {
+                    let s = if l == l1 { s1 } else { 0 };
+                    let e = if l == l2 { to.1 } else { ls[l].len() };
+                    if s >= e && l < l2 {
+                        continue; // nothing of it on this line (it starts at the line break)
+                    }
+                    out.push(Issue { line: a + l, s, e, cont: !first, from, to, hits: hits.clone(), k });
+                    first = false;
                 }
             }
         }
+        out.sort_by_key(|i| (i.line, i.s, i.cont));
+        b.spell = out;
         b.spell_key = (b.version, gen);
     }
 
     /// Problems on line `y`, in order.
-    pub fn spell_on_line(&self, y: usize) -> &[(usize, Hit)] {
+    pub fn spell_on_line(&self, y: usize) -> &[Issue] {
         let v = &self.bb().spell;
-        let a = v.partition_point(|h| h.0 < y);
-        let z = v.partition_point(|h| h.0 <= y);
+        let a = v.partition_point(|h| h.line < y);
+        let z = v.partition_point(|h| h.line <= y);
         &v[a..z]
     }
 
-    /// The problem under (or, failing that, nearest after) the cursor on
-    /// its line.
-    pub fn spell_here(&self) -> Option<&(usize, Hit)> {
+    /// The problem under the cursor.
+    pub fn spell_here(&self) -> Option<&Issue> {
         let (cy, cx) = self.cursor();
-        let hs = self.spell_on_line(cy);
-        hs.iter().find(|h| cx >= h.1.s && cx < h.1.e.max(h.1.s + 1)).or_else(|| hs.iter().find(|h| h.1.s >= cx))
+        self.spell_on_line(cy).iter().find(|h| h.covers(cx))
     }
 
     /// `]s` / `[s`: the next / previous problem, wrapping around.
@@ -1660,20 +1779,15 @@ impl Editor {
         }
         for _ in 0..n.max(1) {
             let c = self.cursor();
-            let v = &self.bb().spell;
+            let v: Vec<(usize, usize)> = self.bb().spell.iter().filter(|h| !h.cont).map(|h| (h.line, h.s)).collect();
             if v.is_empty() {
                 return self.info("no spelling or grammar problems");
             }
-            let at = |h: &(usize, Hit)| (h.0, h.1.s);
-            let target = if fwd {
-                v.iter().find(|h| at(h) > c).or(v.first())
-            } else {
-                v.iter().rev().find(|h| at(h) < c).or(v.last())
-            };
-            let (y, x) = target.map(at).unwrap();
+            let target = if fwd { v.iter().find(|&&p| p > c).or(v.first()) } else { v.iter().rev().find(|&&p| p < c).or(v.last()) };
+            let (y, x) = *target.unwrap();
             let wrapped = if fwd { (y, x) <= c } else { (y, x) >= c };
             self.last_jump = c;
-            self.set_cursor((y, x));
+            self.set_cursor((y, x.min(self.bb().lines[y].len().saturating_sub(1))));
             if wrapped {
                 self.info(if fwd { "search hit BOTTOM, continuing at TOP" } else { "search hit TOP, continuing at BOTTOM" });
             }
@@ -1711,13 +1825,12 @@ impl Editor {
         if let Some(e) = self.speller.ensure() {
             return self.err(format!("spell: {}", e));
         }
-        let (cy, cx) = self.cursor();
-        let here = self.spell_here().filter(|h| cx >= h.1.s && cx < h.1.e.max(h.1.s + 1)).cloned();
-        let (y, s, e, fixes, title) = match here {
-            Some((y, h)) if h.grammar => (y, h.s, h.e, h.fixes.clone(), h.msg.clone()),
+        let here = self.spell_here().cloned();
+        let (from, to, fixes, title) = match here {
+            Some(i) if i.grammar() => (i.from, i.to, i.hit().fixes.clone(), i.hit().msg.clone()),
             other => {
                 let (y, s, e) = match other {
-                    Some((y, h)) => (y, h.s, h.e),
+                    Some(i) => (i.line, i.s, i.e),
                     None => match self.word_range() {
                         Some(r) => r,
                         None => return self.info("no word under the cursor"),
@@ -1728,31 +1841,42 @@ impl Editor {
                 if fixes.is_empty() {
                     return self.info(format!("no suggestions for \"{}\"", w));
                 }
-                (y, s, e, fixes, format!("change \"{}\" to", w))
+                ((y, s), (y, e), fixes, format!("change \"{}\" to", w))
             }
         };
-        let _ = cy;
+        let old = self.bb().text(from, to);
         let items = fixes
             .iter()
             .enumerate()
-            .map(|(i, f)| PickItem { label: if f.is_empty() { format!("(delete \"{}\")", self.bb().lines[y][s..e].trim()) } else { f.clone() }, path: None, buf: None, line: usize::MAX, col: i })
+            .map(|(i, f)| PickItem { label: if f.is_empty() { format!("(delete \"{}\")", old.split_whitespace().collect::<Vec<_>>().join(" ")) } else { f.clone() }, path: None, buf: None, line: usize::MAX, col: i })
             .collect();
-        self.spell_pick = Some((y, s, e, fixes));
+        self.spell_pick = Some((from, to, fixes));
         self.picker = Some(Picker::new(&title, items));
     }
 
     /// Replace the range `z=` was opened on with fix `i`.
     pub fn spell_apply(&mut self, i: usize) {
-        let Some((y, s, e, fixes)) = self.spell_pick.take() else { return };
+        let Some((from, to, fixes)) = self.spell_pick.take() else { return };
         let Some(f) = fixes.get(i) else { return };
-        if y >= self.bb().lines.len() || e > self.bb().lines[y].len() {
+        let b = self.bb();
+        if to.0 >= b.lines.len() || to.1 > b.lines[to.0].len() || from.1 > b.lines[from.0].len() {
             return;
         }
+        // a fix for words split across lines keeps the break after as many words
+        let old = b.text(from, to);
+        let f = match old.find('\n') {
+            Some(nl) => {
+                let n1 = old[..nl].split_whitespace().count();
+                let ws: Vec<&str> = f.split(' ').collect();
+                if n1 > 0 && n1 < ws.len() { format!("{}\n{}", ws[..n1].join(" "), ws[n1..].join(" ")) } else { f.clone() }
+            }
+            None => f.clone(),
+        };
         let c = self.cursor();
         self.b().mark_start(c);
-        self.b().delete((y, s), (y, e));
-        self.b().insert((y, s), f);
-        self.set_cursor((y, s));
+        self.b().delete(from, to);
+        self.b().insert(from, &f);
+        self.set_cursor(from);
         self.after_change();
     }
 
@@ -1762,7 +1886,7 @@ impl Editor {
         let w = match word.map(str::trim).filter(|w| !w.is_empty()) {
             Some(w) => w.to_string(),
             None => {
-                let here = self.spell_here().filter(|h| !h.1.grammar && self.cursor().1 >= h.1.s && self.cursor().1 < h.1.e).map(|h| (h.0, h.1.s, h.1.e));
+                let here = self.spell_here().filter(|h| !h.grammar()).map(|h| (h.line, h.s, h.e));
                 match here.or_else(|| self.word_range()) {
                     Some((y, s, e)) => self.bb().lines[y][s..e].to_string(),
                     None => return self.info("no word under the cursor"),
@@ -1783,11 +1907,11 @@ impl Editor {
         let items: Vec<PickItem> = b
             .spell
             .iter()
-            .map(|(y, h)| {
-                let w = &b.lines[*y][h.s..h.e];
-                let what = if h.grammar { h.msg.clone() } else { format!("\"{}\"", w) };
-                let col = b.lines[*y][..h.s].chars().count();
-                PickItem { label: format!("{:>5}: {} {}", y + 1, if h.grammar { "G" } else { "S" }, what), path: None, buf: Some(self.cur), line: *y, col }
+            .filter(|i| !i.cont)
+            .map(|i| {
+                let what = if i.grammar() { i.hit().msg.clone() } else { format!("\"{}\"", &b.lines[i.line][i.s..i.e]) };
+                let col = b.lines[i.line][..i.s].chars().count();
+                PickItem { label: format!("{:>5}: {} {}", i.line + 1, if i.grammar() { "G" } else { "S" }, what), path: None, buf: Some(self.cur), line: i.line, col }
             })
             .collect();
         if items.is_empty() {
@@ -1802,12 +1926,11 @@ impl Editor {
         if self.mode == Mode::Insert {
             return None;
         }
-        let (cy, cx) = self.cursor();
-        let h = self.spell_on_line(cy).iter().find(|h| cx >= h.1.s && cx < h.1.e.max(h.1.s + 1))?;
-        Some(if h.1.grammar {
-            (format!("grammar: {}  (z= fix)", h.1.msg), true)
+        let i = self.spell_here()?;
+        Some(if i.grammar() {
+            (format!("grammar: {}  (z= fix)", i.hit().msg), true)
         } else {
-            (format!("spelling: \"{}\" is not in the dictionary  (z= suggestions, zg add)", &self.bb().lines[cy][h.1.s..h.1.e]), false)
+            (format!("spelling: \"{}\" is not in the dictionary  (z= suggestions, zg add)", &self.bb().lines[i.line][i.s..i.e]), false)
         })
     }
 }
@@ -1887,6 +2010,21 @@ mod tests {
     }
 
     #[test]
+    fn paragraphs() {
+        let md: Vec<String> = ["# Title", "first line of", "the paragraph", "", "- item one", "  continues here", "- item two", "| a | b |", "text"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(blocks(&md, Kind::Markdown), vec![(0, 1), (1, 3), (4, 6), (6, 7), (7, 8), (8, 9)]);
+        let g = |ls: &[&str]| {
+            let mut s = Speller::default();
+            s.dict = Some(Err(String::new()));
+            let ls: Vec<String> = ls.iter().map(|s| s.to_string()).collect();
+            let text = ls.join("\n");
+            s.block(&ls, true).iter().map(|h| text[h.s..h.e].to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(g(&["This is the", "the end. and", "it could", "of been an", "banana."]), vec!["the ", "and", "could\nof", "an"]);
+        assert!(g(&["Plan A", "and plan B."]).is_empty());
+    }
+
+    #[test]
     fn grammar_rules() {
         let g = grammar_of("This is the the end.");
         assert_eq!(g, vec![(" the".into(), vec!["".into()])]);
@@ -1924,9 +2062,11 @@ mod real {
         let t = std::time::Instant::now();
         let mut n = 0;
         let mut seen = std::collections::BTreeMap::new();
-        for (l, p) in lines.iter().zip(&prose) {
-            if *p {
-                for h in s.line(l, true).iter() {
+        let _ = &prose;
+        for (a, z) in blocks(&lines, Kind::Markdown) {
+            let l = &lines[a..z].join("\n");
+            {
+                for h in s.block(&lines[a..z], true).iter() {
                     n += 1;
                     let k = if h.grammar { format!("G {} -> {:?} ({})", &l[h.s..h.e], h.fixes, h.msg) } else { format!("S {}", &l[h.s..h.e]) };
                     *seen.entry(k).or_insert(0) += 1;
@@ -1965,16 +2105,21 @@ mod real {
             }
             println!("  {}: {:?}", name, t.elapsed());
         }
+        // the editor's path: paragraphs, then one line changed
+        let mut s4 = Speller::default();
+        s4.lang = "en_US".into();
+        s4.ensure();
+        let t = std::time::Instant::now();
+        let mut hits = 0;
+        for (a, z) in blocks(&big, Kind::Markdown) {
+            hits += s4.block(&big[a..z], true).len();
+        }
+        println!("{} lines cold, by paragraph: {:?} ({} hits)", big.len(), t.elapsed(), hits);
         big[100].push_str(" teh");
         let t = std::time::Instant::now();
-        let p = prose_lines(&big, Kind::Markdown);
         let mut v = Vec::new();
-        for (i, (l, ok)) in big.iter().zip(&p).enumerate() {
-            if *ok {
-                for h in s2.line(l, true).iter() {
-                    v.push((i, h.clone()));
-                }
-            }
+        for (a, z) in blocks(&big, Kind::Markdown) {
+            v.push(s4.block(&big[a..z], true));
         }
         println!("{} lines after one edit: {:?}", big.len(), t.elapsed());
         for (k, c) in seen {

@@ -185,9 +185,10 @@ impl Editor {
                 dc += cw;
             }
             // spelling and grammar: curly underline (not the word being typed)
-            let first = b.spell.partition_point(|h| h.0 < ln);
-            for (_, sh) in b.spell[first..].iter().take_while(|h| h.0 == ln) {
-                if !sh.grammar && mode == Mode::Insert && ln == cy && sh.e == cx {
+            let first = b.spell.partition_point(|h| h.line < ln);
+            for sh in b.spell[first..].iter().take_while(|h| h.line == ln) {
+                let grammar = sh.grammar();
+                if !grammar && mode == Mode::Insert && ln == cy && sh.e == cx {
                     continue;
                 }
                 let (ds, de) = (disp_col(line, sh.s, ts), disp_col(line, sh.e, ts));
@@ -196,7 +197,7 @@ impl Editor {
                     if x < w {
                         let mut st = self.screen.get_style(x, row);
                         st.attr |= UNDERCURL;
-                        st.fg = if sh.grammar { C_GRAMMAR } else { C_SPELL };
+                        st.fg = if grammar { C_GRAMMAR } else { C_SPELL };
                         self.screen.set_style(x, row, st);
                     }
                 }
@@ -261,8 +262,8 @@ impl Editor {
         let (bname, bdirty, blang) = (b.name.clone(), b.dirty, b.lang.name);
         let ne = b.diags.iter().filter(|d| d.sev == Sev::Error).count();
         let nw = b.diags.iter().filter(|d| d.sev == Sev::Warning).count();
-        let ng = b.spell.iter().filter(|h| h.1.grammar).count();
-        let ns = b.spell.len() - ng;
+        let ng = b.spell.iter().filter(|h| !h.cont && h.grammar()).count();
+        let ns = b.spell.iter().filter(|h| !h.cont).count() - ng;
         let col = disp_col(&b.lines[cy], cx, ts) + 1;
         let pct = if b.lines.len() <= 1 { 100 } else { cy * 100 / (b.lines.len() - 1) };
         let (mname, mbg) = match mode {

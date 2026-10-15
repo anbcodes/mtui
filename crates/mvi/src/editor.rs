@@ -154,8 +154,8 @@ pub struct Editor {
     sym_cache: Option<HashMap<String, String>>,
     pub picker: Option<Picker>,
     pub speller: crate::spell::Speller,
-    /// What `z=` replaces: (line, start, end, fixes).
-    pub spell_pick: Option<(usize, usize, usize, Vec<String>)>,
+    /// What `z=` replaces (from, to) and with what.
+    pub spell_pick: Option<(Pos, Pos, Vec<String>)>,
     pub preview: Option<crate::preview::Preview>,
     /// The live browser preview (`:mmd`), when running.
     pub live: Option<crate::live::Live>,

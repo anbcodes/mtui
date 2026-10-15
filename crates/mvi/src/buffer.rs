@@ -30,7 +30,7 @@ pub struct Buffer {
     pub diags: Vec<Diag>,
     /// Spelling and grammar problems by line, for (version, speller gen)
     /// `spell_key`; `spell_on` overrides whether the buffer is checked.
-    pub spell: Vec<(usize, crate::spell::Hit)>,
+    pub spell: Vec<crate::spell::Issue>,
     pub spell_key: (u64, u64),
     pub spell_on: Option<bool>,
     pub expand_tab: bool,

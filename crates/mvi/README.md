@@ -34,9 +34,11 @@ Markdown, `.txt`, git commit messages and mail drafts (`.eml`: the Subject and t
 
 Spelling uses the system's Hunspell dictionaries (`/usr/share/hunspell`, `~/.local/share/hunspell`, `$DICPATH`, or `~/.config/mvi/spell/LANG.{aff,dic}`; Debian/Ubuntu: `hunspell-en-us`) and falls back to `/usr/share/dict/words`. Words are looked up the way Hunspell does it (a stem plus prefix/suffix rules), straight from the `.dic` text, so en_US takes about 2 MB and loads in ~10 ms, on first use. Code is skipped: fenced and indented code blocks, `inline code`, URLs, e-mail addresses, HTML tags, link targets, front matter, math, shell prompts, and words that look like identifiers (`snake_case`, `camelCase`, `ALLCAPS`, anything with digits or dots). A short list of developer words (`config`, `repo`, `backend`, `regex`, …) is accepted too.
 
+Text is checked a paragraph at a time, so hard-wrapped prose works: *could* at the end of one line and *of* at the start of the next is still caught (underlined on both lines, and the fix keeps your line break). Blank lines end a paragraph, and in markdown so do headings, list items, table rows and quotes.
+
 Grammar rules are few and chosen to be right when they fire: repeated words (*the the*), *a*/*an* (by sound: *an hour*, *a union*, *a European*; acronyms are left alone), a lower-case sentence start, lower-case *i*, space before punctuation, missing space after a comma, doubled punctuation, and well-known confusions (*could of*, *more then*, *its a*, *your welcome*, *their is*, *per say*, *free reign*, …).
 
-Results are cached per line: after the first pass (a few ms for a typical document; ~0.2 s for 40k lines) a keystroke rechecks just the changed line. Suggestions combine weighted edit distance (swapped letters, doubled letters, neighbouring keys and vowel confusions are cheap), the dictionary's REP table, split words (*alot* → *a lot*) and an n-gram scan of the dictionary for the harder cases; ~10 ms each.
+Results are cached per paragraph: after the first pass (a few ms for a typical document; ~0.2 s for 40k lines) a keystroke rechecks just the paragraph it changed. Suggestions combine weighted edit distance (swapped letters, doubled letters, neighbouring keys and vowel confusions are cheap), the dictionary's REP table, split words (*alot* → *a lot*) and an n-gram scan of the dictionary for the harder cases; ~10 ms each.
 
 ## As a library
 
