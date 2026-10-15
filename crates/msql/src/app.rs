@@ -820,9 +820,18 @@ impl App {
                     self.pane.key(Key::Mouse(m));
                 } else if in_schema {
                     self.focus = Focus::Schema;
-                    let i = self.tree_top + m.y - 2;
-                    if m.y >= 2 && i < self.tree_rows().len() {
-                        self.tree_sel = i;
+                    // Clicking a table selects it and opens or closes its columns.
+                    let rows = self.tree_rows();
+                    if m.y >= 2 {
+                        if let Some(&(t, c)) = rows.get(self.tree_top + m.y - 2) {
+                            self.tree_sel = self.tree_top + m.y - 2;
+                            if c.is_none() {
+                                let name = self.schema.read().unwrap().tables[t].full_name();
+                                if !self.open.remove(&name) {
+                                    self.open.insert(name);
+                                }
+                            }
+                        }
                     }
                 } else if in_results {
                     self.focus = Focus::Results;
