@@ -17,6 +17,8 @@ NORMAL  h j k l w b e W B E ge 0 ^ $ gg G { } % f F t T ; , H M L  counts work
         v V visual · q{r} record · @{r} play · m{a-z} mark · '{a-z} jump · '' back
         gd goto definition · gf open file · K line diagnostics · ]d [d next/prev diag
         ]e [e next/prev error · ]q [q quickfix · ]b [b buffers · ^^ alt buffer · ^S save
+SPELL   markdown/text files: ]s [s next/prev problem · z= suggestions/fix · zg add word
+        (~/.config/mvi/words) · zG accept for this session · :spell list · :spellgood word
 LEADER  <space>f files  <space>b buffers  <space>s symbols  <space>d diagnostics
         <space>/ grep  <space>c run checker  <space>y yank to system clipboard (OSC52)
 INSERT  Tab/^N/^P cycle completions, Enter accepts, ^Space force, ^W ^U ^R{reg} ^T ^D
@@ -28,6 +30,7 @@ EX      :w :q :wq :x :q! :qa :wa :e file :e! :enew :bn :bp :bd :b N :ls :N (goto
         :mmd         live HTML preview in the browser: follows edits and the cursor;
                      double-click a block there to jump to its line; :mmd stop
         :set nu rnu ts=N sw=N tw=N et noet list ac(autocheck) acp(autocomplete) hls mouse ft=lang
+        :set spell nospell spelllang=en_GB grammar nogrammar spellstrict(US or GB only)
         :checker <lang> <cmd>   (use {file}; prefix 'Marker|' to run where Marker lives)
 MOUSE   click moves the cursor · drag selects (visual) · double-click word · triple-click line
         wheel scrolls · shift+drag uses the terminal's own selection · :set nomouse
@@ -164,7 +167,7 @@ impl Editor {
     fn cmd_complete(&mut self) {
         let Some(sp) = self.cmdline.rfind(' ') else {
             // complete command names
-            let cmds = ["write", "quit", "edit", "enew", "bnext", "bprev", "bdelete", "buffers", "set", "check", "checker", "diag", "grep", "files", "help", "nohlsearch", "preview", "mmd", "theme", "registers", "sort", "normal", "global", "substitute", "read", "pwd", "cd", "wall", "qall", "xit"];
+            let cmds = ["write", "quit", "edit", "enew", "bnext", "bprev", "bdelete", "buffers", "set", "check", "checker", "diag", "grep", "files", "help", "nohlsearch", "spell", "spellgood", "preview", "mmd", "theme", "registers", "sort", "normal", "global", "substitute", "read", "pwd", "cd", "wall", "qall", "xit"];
             let m: Vec<&str> = cmds.iter().copied().filter(|c| c.starts_with(self.cmdline.as_str())).collect();
             if m.len() == 1 {
                 self.cmdline = m[0].to_string() + " ";
@@ -427,6 +430,8 @@ impl Editor {
             "s" | "substitute" | "&" => self.substitute(r1, r2, if name == "&" { "" } else { args }),
             "g" | "global" | "v" | "vglobal" => self.global(range.unwrap_or((0, nl - 1)), args, name.starts_with('v') || args.starts_with('!')),
             "noh" | "nohlsearch" => self.show_hl = false,
+            "spell" | "spe" => self.open_spell_picker(),
+            "spellgood" | "spellg" => self.spell_good(Some(args), true),
             "set" | "se" => self.set(args),
             "check" | "make" | "mak" | "lint" => self.run_check(true),
             "checker" => {
@@ -694,7 +699,7 @@ impl Editor {
             let b = self.bb();
             let o = &self.opts;
             let s = format!(
-                "{}number {}relativenumber ts={} sw={} tw={} {}expandtab {}autocheck {}autocomplete {}hlsearch {}list {}mouse ft={}",
+                "{}number {}relativenumber ts={} sw={} tw={} {}expandtab {}autocheck {}autocomplete {}hlsearch {}list {}mouse ft={} {}spell spelllang={} {}grammar",
                 if o.number { "" } else { "no" },
                 if o.relnum { "" } else { "no" },
                 o.tabstop,
@@ -706,7 +711,10 @@ impl Editor {
                 if o.hlsearch { "" } else { "no" },
                 if o.list { "" } else { "no" },
                 if o.mouse { "" } else { "no" },
-                b.lang.name
+                b.lang.name,
+                if self.spell_active() { "" } else { "no" },
+                self.speller.lang,
+                if self.speller.grammar { "" } else { "no" }
             );
             self.info(s);
             return;
@@ -744,6 +752,23 @@ impl Editor {
                     mtui::term::set_mouse(self.opts.mouse);
                 }
                 "et" | "expandtab" => flag!(self.b().expand_tab),
+                "spell" => {
+                    let v = on.unwrap_or(!self.spell_active());
+                    self.opts.spell = v;
+                    self.b().spell_on = Some(v);
+                }
+                "spl" | "spelllang" => match val.filter(|v| !v.is_empty()) {
+                    Some(v) => self.speller.set_lang(v),
+                    None => self.info(format!("spelllang={}", self.speller.lang)),
+                },
+                "grammar" => {
+                    let v = on.unwrap_or(!self.speller.grammar);
+                    self.speller.set_grammar(v);
+                }
+                "spellstrict" => {
+                    let v = on.unwrap_or(!self.speller.strict);
+                    self.speller.set_strict(v);
+                }
                 "tw" | "textwidth" => {
                     if let Some(n) = num.filter(|&n| (10..=500).contains(&n)) {
                         self.opts.textwidth = n;

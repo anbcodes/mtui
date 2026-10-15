@@ -11,6 +11,7 @@ pub mod live;
 pub mod picker;
 pub mod preview;
 pub mod render;
+pub mod spell;
 
 pub use editor::Editor;
 use mtui::syntax;

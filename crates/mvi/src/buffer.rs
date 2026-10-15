@@ -28,6 +28,11 @@ pub struct Buffer {
     pub lang: &'static Lang,
     pub hl: Highlighter,
     pub diags: Vec<Diag>,
+    /// Spelling and grammar problems by line, for (version, speller gen)
+    /// `spell_key`; `spell_on` overrides whether the buffer is checked.
+    pub spell: Vec<(usize, crate::spell::Hit)>,
+    pub spell_key: (u64, u64),
+    pub spell_on: Option<bool>,
     pub expand_tab: bool,
     pub indent_w: usize,
     // view state
@@ -61,6 +66,9 @@ impl Buffer {
             lang: crate::syntax::plain(),
             hl: Highlighter::default(),
             diags: Vec::new(),
+            spell: Vec::new(),
+            spell_key: (0, 0),
+            spell_on: None,
             expand_tab: true,
             indent_w: 4,
             cy: 0,

@@ -2,7 +2,7 @@
 
 use crate::diag::Sev;
 use crate::editor::{disp_col, Editor, Mode, TK};
-use mtui::screen::{char_width, Style, BOLD, ITALIC, UNDERLINE};
+use mtui::screen::{char_width, Style, BOLD, ITALIC, UNDERCURL, UNDERLINE};
 use crate::syntax as sx;
 
 const FG_DIM: u8 = 246;
@@ -15,6 +15,8 @@ const BG_POPSEL: u8 = 24;
 const C_ERR: u8 = 203;
 const C_WARN: u8 = 214;
 const C_INFO: u8 = 110;
+const C_SPELL: u8 = 203;
+const C_GRAMMAR: u8 = 75;
 
 fn kind_style(k: u8) -> Style {
     sx::style(k)
@@ -75,6 +77,7 @@ impl Editor {
             return self.draw_preview();
         }
         self.scroll();
+        self.refresh_spell();
         let (w, h) = (self.screen.w, self.screen.h);
         if w < 10 || h < 3 {
             return None;
@@ -181,6 +184,23 @@ impl Editor {
                 }
                 dc += cw;
             }
+            // spelling and grammar: curly underline (not the word being typed)
+            let first = b.spell.partition_point(|h| h.0 < ln);
+            for (_, sh) in b.spell[first..].iter().take_while(|h| h.0 == ln) {
+                if !sh.grammar && mode == Mode::Insert && ln == cy && sh.e == cx {
+                    continue;
+                }
+                let (ds, de) = (disp_col(line, sh.s, ts), disp_col(line, sh.e, ts));
+                for xx in ds.max(left)..de {
+                    let x = gw + xx - left;
+                    if x < w {
+                        let mut st = self.screen.get_style(x, row);
+                        st.attr |= UNDERCURL;
+                        st.fg = if sh.grammar { C_GRAMMAR } else { C_SPELL };
+                        self.screen.set_style(x, row, st);
+                    }
+                }
+            }
             // diagnostics: underline the span and add end-of-line text
             let mut eol_x = (gw + dc.saturating_sub(left)).max(gw);
             if dc < left {
@@ -241,6 +261,8 @@ impl Editor {
         let (bname, bdirty, blang) = (b.name.clone(), b.dirty, b.lang.name);
         let ne = b.diags.iter().filter(|d| d.sev == Sev::Error).count();
         let nw = b.diags.iter().filter(|d| d.sev == Sev::Warning).count();
+        let ng = b.spell.iter().filter(|h| h.1.grammar).count();
+        let ns = b.spell.len() - ng;
         let col = disp_col(&b.lines[cy], cx, ts) + 1;
         let pct = if b.lines.len() <= 1 { 100 } else { cy * 100 / (b.lines.len() - 1) };
         let (mname, mbg) = match mode {
@@ -280,6 +302,12 @@ impl Editor {
         if nw > 0 {
             right.push((format!("W{} ", nw), Style::new(C_WARN, BG_STATUS, BOLD)));
         }
+        if ns > 0 {
+            right.push((format!("S{} ", ns), Style::new(C_SPELL, BG_STATUS, 0)));
+        }
+        if ng > 0 {
+            right.push((format!("G{} ", ng), Style::new(C_GRAMMAR, BG_STATUS, 0)));
+        }
         right.push((format!("{} ", blang), Style::new(FG_DIM, BG_STATUS, 0)));
         right.push((format!(" {}:{} {:>3}% ", cy + 1, col, pct), Style::new(16, mbg, 0)));
         let rw: usize = right.iter().map(|(s, _)| s.chars().count()).sum();
@@ -305,6 +333,8 @@ impl Editor {
         } else if let Some(d) = self.bb().diags.iter().filter(|d| d.line == cy).min_by_key(|d| d.sev) {
             let m = format!("{:?}: {}", d.sev, d.msg.lines().next().unwrap_or(""));
             self.screen.puts(0, my, &m, Style::fg(sev_color(d.sev)), w);
+        } else if let Some((m, grammar)) = self.spell_message() {
+            self.screen.puts(0, my, &m, Style::fg(if grammar { C_GRAMMAR } else { C_SPELL }), w);
         }
 
         // cursor position in text

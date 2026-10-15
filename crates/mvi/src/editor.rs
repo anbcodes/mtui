@@ -107,6 +107,8 @@ pub struct Opts {
     pub list: bool,
     pub mouse: bool,
     pub checks: HashMap<String, Vec<String>>,
+    /// Check spelling and grammar in markdown and text files.
+    pub spell: bool,
 }
 
 pub struct Editor {
@@ -151,6 +153,9 @@ pub struct Editor {
     pub host_cmds: Vec<String>,
     sym_cache: Option<HashMap<String, String>>,
     pub picker: Option<Picker>,
+    pub speller: crate::spell::Speller,
+    /// What `z=` replaces: (line, start, end, fixes).
+    pub spell_pick: Option<(usize, usize, usize, Vec<String>)>,
     pub preview: Option<crate::preview::Preview>,
     /// The live browser preview (`:mmd`), when running.
     pub live: Option<crate::live::Live>,
@@ -362,6 +367,8 @@ impl Editor {
             host_names: Vec::new(),
             host_cmds: Vec::new(),
             picker: None,
+            speller: Default::default(),
+            spell_pick: None,
             preview: None,
             live: None,
             check_id: 0,
@@ -371,7 +378,7 @@ impl Editor {
             check_rx: rx,
             qf: Vec::new(),
             qf_idx: 0,
-            opts: Opts { number: true, relnum: false, tabstop: 4, textwidth: 79, autocheck: true, autocomplete: true, hlsearch: true, list: false, mouse: true, checks: HashMap::new() },
+            opts: Opts { number: true, relnum: false, tabstop: 4, textwidth: 79, autocheck: true, autocomplete: true, hlsearch: true, list: false, mouse: true, checks: HashMap::new(), spell: true },
             quit: false,
             hl_scratch: Vec::new(),
             ins_reg_pending: false,
@@ -2085,6 +2092,12 @@ impl Editor {
             Key::Char('K') => self.show_line_diags(),
             Key::Char('z') => {
                 let th = self.text_h();
+                match next {
+                    Some('=') => return P::Ok(self.spell_suggest()),
+                    Some('g') => return P::Ok(self.spell_good(None, true)),
+                    Some('G') => return P::Ok(self.spell_good(None, false)),
+                    _ => {}
+                }
                 let b = self.b();
                 match next {
                     Some('z') | Some('.') => b.top = b.cy.saturating_sub(th / 2),
@@ -2111,6 +2124,7 @@ impl Editor {
                 match next {
                     Some('d') | Some('e') => self.jump_diag(fwd, next == Some('e')),
                     Some('q') => self.jump_qf(fwd),
+                    Some('s') => self.jump_spell(fwd, n),
                     Some('b') => {
                         let nb = self.bufs.len();
                         let i = if fwd { (self.cur + 1) % nb } else { (self.cur + nb - 1) % nb };
@@ -2358,7 +2372,7 @@ impl Editor {
         }
     }
 
-    fn after_change(&mut self) {
+    pub(crate) fn after_change(&mut self) {
         let c = self.cursor();
         self.b().commit(c);
         self.clamp();
@@ -2841,11 +2855,19 @@ impl Editor {
         let p = self.picker.as_mut().unwrap();
         match p.key(&k) {
             Pick::Continue => {}
-            Pick::Cancel => self.picker = None,
+            Pick::Cancel => {
+                self.picker = None;
+                self.spell_pick = None;
+            }
             Pick::Accept => {
                 let it = p.selected().cloned();
                 self.picker = None;
-                if let Some(it) = it {
+                if self.spell_pick.is_some() {
+                    if let Some(it) = it {
+                        self.spell_apply(it.col);
+                    }
+                    self.spell_pick = None;
+                } else if let Some(it) = it {
                     let c = self.cursor();
                     self.note_jump(c);
                     self.open_pick(it);
