@@ -12,6 +12,7 @@ pub mod picker;
 pub mod preview;
 pub mod render;
 pub mod spell;
+pub mod suggest;
 
 pub use editor::Editor;
 use mtui::syntax;
@@ -58,6 +59,7 @@ pub fn run(ed: &mut Editor, input: &mut term::Input) {
             ed.screen.resize(w, h);
         }
         ed.poll_check();
+        ed.poll_suggest();
         ed.sync_mmd();
         if mtui::theme::poll() {
             ed.screen.invalidate();
@@ -112,6 +114,7 @@ impl Pane {
         self.ed.handle_key(k);
         self.ed.suspend = false;
         self.ed.poll_check();
+        self.ed.poll_suggest();
         self.ed.sync_mmd();
     }
 

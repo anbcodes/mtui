@@ -17,6 +17,9 @@ const C_WARN: u8 = 214;
 const C_INFO: u8 = 110;
 const C_SPELL: u8 = 203;
 const C_GRAMMAR: u8 = 75;
+const C_SUGGEST: u8 = 114;
+const BG_SUG_DEL: u8 = 52;
+const BG_SUG_ADD: u8 = 22;
 
 fn kind_style(k: u8) -> Style {
     sx::style(k)
@@ -106,6 +109,9 @@ impl Editor {
             let worst = b.diags.iter().filter(|d| d.line == ln).map(|d| d.sev).min();
             if let Some(s) = worst {
                 self.screen.put(0, row, match s { Sev::Error => 'E', Sev::Warning => 'W', Sev::Info => 'I' }, Style::new(sev_color(s), 0, BOLD));
+            }
+            else if b.sugs.iter().any(|s| s.line <= ln && s.end().0 >= ln) {
+                self.screen.put(0, row, '±', Style::new(C_SUGGEST, 0, BOLD));
             }
             if self.opts.number || self.opts.relnum {
                 let n = if self.opts.relnum && ln != cy { (ln as isize - cy as isize).unsigned_abs() } else { ln + 1 };
@@ -202,6 +208,31 @@ impl Editor {
                     }
                 }
             }
+            // suggestions: the text they replace on a dark red ground (green where
+            // text would be inserted, underlined for a bare comment, dim when out of date)
+            for s in b.sugs.iter().filter(|s| s.line <= ln && s.end().0 >= ln) {
+                let e = s.end();
+                let (ss, se) = (if s.line == ln { s.col } else { 0 }, if e.0 == ln { e.1 } else { line.len() });
+                let stale = s.stale(&b.lines);
+                let (ss, se) = if ss == se { (ss.min(line.len().saturating_sub(1)), (se + 1).min(line.len())) } else { (ss, se) };
+                let (ds, de) = (disp_col(line, ss.min(line.len()), ts), disp_col(line, se.min(line.len()), ts));
+                for xx in ds.max(left)..de.max(ds + 1) {
+                    let x = gw + xx - left;
+                    if x < w {
+                        let mut st = self.screen.get_style(x, row);
+                        if stale {
+                            st.fg = 244;
+                            st.attr |= UNDERLINE;
+                        } else if s.new.is_none() {
+                            st.attr |= UNDERLINE;
+                            st.fg = C_WARN;
+                        } else {
+                            st.bg = if s.old.is_empty() { BG_SUG_ADD } else { BG_SUG_DEL };
+                        }
+                        self.screen.set_style(x, row, st);
+                    }
+                }
+            }
             // diagnostics: underline the span and add end-of-line text
             let mut eol_x = (gw + dc.saturating_sub(left)).max(gw);
             if dc < left {
@@ -243,6 +274,15 @@ impl Editor {
                 }
                 if best.map_or(true, |bd| d.sev < bd.sev) {
                     best = Some(d);
+                }
+            }
+            if best.is_none() {
+                if let Some(s) = b.sugs.iter().find(|s| s.line == ln) {
+                    let x = eol_x + 3;
+                    if x + 4 < w {
+                        let msg = format!("± {}", s.summary());
+                        self.screen.puts(x, row, &msg, Style::new(C_SUGGEST, base_bg, ITALIC), w);
+                    }
                 }
             }
             if let Some(d) = best {
@@ -303,6 +343,9 @@ impl Editor {
         if nw > 0 {
             right.push((format!("W{} ", nw), Style::new(C_WARN, BG_STATUS, BOLD)));
         }
+        if !self.bb().sugs.is_empty() {
+            right.push((format!("±{} ", self.bb().sugs.len()), Style::new(C_SUGGEST, BG_STATUS, BOLD)));
+        }
         if ns > 0 {
             right.push((format!("S{} ", ns), Style::new(C_SPELL, BG_STATUS, 0)));
         }
@@ -334,6 +377,8 @@ impl Editor {
         } else if let Some(d) = self.bb().diags.iter().filter(|d| d.line == cy).min_by_key(|d| d.sev) {
             let m = format!("{:?}: {}", d.sev, d.msg.lines().next().unwrap_or(""));
             self.screen.puts(0, my, &m, Style::fg(sev_color(d.sev)), w);
+        } else if let Some(m) = self.suggest_message() {
+            self.screen.puts(0, my, &m, Style::fg(C_SUGGEST), w);
         } else if let Some((m, grammar)) = self.spell_message() {
             self.screen.puts(0, my, &m, Style::fg(if grammar { C_GRAMMAR } else { C_SPELL }), w);
         }

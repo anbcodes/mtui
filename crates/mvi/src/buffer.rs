@@ -11,6 +11,8 @@ pub type Pos = (usize, usize); // (line, byte col)
 enum Edit {
     Ins(Pos, String),
     Del(Pos, String),
+    /// A suggestion accepted or rejected: undo puts it back (at this index).
+    Sug(usize, crate::suggest::Suggestion),
 }
 
 #[derive(Default)]
@@ -33,6 +35,9 @@ pub struct Buffer {
     pub spell: Vec<crate::spell::Issue>,
     pub spell_key: (u64, u64),
     pub spell_on: Option<bool>,
+    /// Suggestions from `FILE.suggest`, and its mtime when last read or written.
+    pub sugs: Vec<crate::suggest::Suggestion>,
+    pub sug_stamp: Option<std::time::SystemTime>,
     pub expand_tab: bool,
     pub indent_w: usize,
     // view state
@@ -69,6 +74,8 @@ impl Buffer {
             spell: Vec::new(),
             spell_key: (0, 0),
             spell_on: None,
+            sugs: Vec::new(),
+            sug_stamp: None,
             expand_tab: true,
             indent_w: 4,
             cy: 0,
@@ -95,6 +102,7 @@ impl Buffer {
             let first = b.lines.first().cloned().unwrap_or_default();
             b.lang = crate::syntax::detect(&p, &first);
             b.detect_indent();
+            b.load_suggest();
         }
         b
     }
@@ -156,6 +164,8 @@ impl Buffer {
             }
         }
         self.dirty = false;
+        self.reload_suggest_if_changed();
+        self.save_suggest();
         Ok(data.len())
     }
 
@@ -171,6 +181,7 @@ impl Buffer {
 
     fn raw_insert(&mut self, (l, c): Pos, text: &str) -> Pos {
         self.touch(l);
+        crate::suggest::shift_insert(&mut self.sugs, (l, c), text);
         if !text.contains('\n') {
             self.lines[l].insert_str(c, text);
             return (l, c + text.len());
@@ -188,6 +199,7 @@ impl Buffer {
 
     fn raw_delete(&mut self, a: Pos, b: Pos) -> String {
         self.touch(a.0);
+        crate::suggest::shift_delete(&mut self.sugs, a, b);
         if a.0 == b.0 {
             return self.lines[a.0].drain(a.1..b.1).collect();
         }
@@ -213,6 +225,14 @@ impl Buffer {
         self.shift_diags(p, text.matches('\n').count() as isize);
         self.cur.edits.push(Edit::Ins(p, text.to_string()));
         self.raw_insert(p, text)
+    }
+
+    /// Drop suggestion `i` (accepted or rejected), as an undoable step.
+    pub fn remove_sug(&mut self, i: usize) -> crate::suggest::Suggestion {
+        let s = self.sugs.remove(i);
+        self.redo.clear();
+        self.cur.edits.push(Edit::Sug(i, s.clone()));
+        s
     }
 
     pub fn delete(&mut self, a: Pos, b: Pos) -> String {
@@ -287,9 +307,13 @@ impl Buffer {
                 Edit::Del(p, t) => {
                     self.raw_insert(*p, t);
                 }
+                Edit::Sug(i, s) => self.sugs.insert((*i).min(self.sugs.len()), s.clone()),
             }
         }
-        let c = if g.cursor.0 == usize::MAX { g.edits.first().map(|e| match e { Edit::Ins(p, _) | Edit::Del(p, _) => *p }).unwrap_or((0, 0)) } else { g.cursor };
+        let c = if g.cursor.0 == usize::MAX { g.edits.first().map(|e| match e { Edit::Ins(p, _) | Edit::Del(p, _) => *p, Edit::Sug(_, s) => (s.line, s.col) }).unwrap_or((0, 0)) } else { g.cursor };
+        if g.edits.iter().any(|e| matches!(e, Edit::Sug(..))) {
+            self.save_suggest();
+        }
         self.redo.push(g);
         Some(c)
     }
@@ -308,7 +332,16 @@ impl Buffer {
                     self.raw_delete(*p, end);
                     last = *p;
                 }
+                Edit::Sug(_, s) => {
+                    if let Some(i) = self.sugs.iter().position(|x| x == s) {
+                        self.sugs.remove(i);
+                    }
+                    last = (s.line, s.col);
+                }
             }
+        }
+        if g.edits.iter().any(|e| matches!(e, Edit::Sug(..))) {
+            self.save_suggest();
         }
         self.undo.push(g);
         Some(last)

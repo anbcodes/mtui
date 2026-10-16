@@ -2117,6 +2117,8 @@ impl Editor {
                     }
                 }
                 Some('J') => self.join_lines(n, false),
+                Some('a') => self.suggest_accept(false),
+                Some('x') => self.suggest_reject(false),
                 _ => return need(next),
             },
             Key::Char(']') | Key::Char('[') => {
@@ -2125,6 +2127,7 @@ impl Editor {
                     Some('d') | Some('e') => self.jump_diag(fwd, next == Some('e')),
                     Some('q') => self.jump_qf(fwd),
                     Some('s') => self.jump_spell(fwd, n),
+                    Some('x') => self.jump_suggest(fwd, n),
                     Some('b') => {
                         let nb = self.bufs.len();
                         let i = if fwd { (self.cur + 1) % nb } else { (self.cur + nb - 1) % nb };
@@ -2987,8 +2990,9 @@ impl Editor {
     fn show_line_diags(&mut self) {
         let cy = self.cursor().0;
         let lines: Vec<String> = self.bb().diags.iter().filter(|d| d.line == cy).map(|d| format!("{:?}: {}", d.sev, d.msg)).collect();
+        let lines = if lines.is_empty() { self.suggest_details() } else { lines };
         if lines.is_empty() {
-            self.info("no diagnostics on this line");
+            self.info("no diagnostics or suggestions on this line");
         } else {
             self.msg_lines = lines;
         }

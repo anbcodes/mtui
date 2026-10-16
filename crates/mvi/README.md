@@ -40,6 +40,37 @@ Grammar rules are few and chosen to be right when they fire: repeated words (*th
 
 Results are cached per paragraph: after the first pass (a few ms for a typical document; ~0.2 s for 40k lines) a keystroke rechecks just the paragraph it changed. Suggestions combine weighted edit distance (swapped letters, doubled letters, neighbouring keys and vowel confusions are cheap), the dictionary's REP table, split words (*alot* → *a lot*) and an n-gram scan of the dictionary for the harder cases; ~10 ms each.
 
+## Suggestions
+
+`FILE.suggest`, next to the file, holds proposed edits and comments, like suggestion mode in Google Docs: a reviewer (an AI, say) adds small changes with the reasoning, and you accept or reject each. Blocks are separated by blank lines:
+
+```
+@ 1:6
+- ,
++
+> No comma needed here.
+
+@ 2
+- could of
++ could have
+> "of" is a mistake for "have".
+
+@ 3
+> A comment on the whole line.
+```
+
+`@ LINE:COL` (1-based, the column is optional), `-` the existing text, `+` the replacement (`+` alone deletes; `+` without `-` inserts), `>` the comment; with only `-` lines it is a comment on that text. The `-` text is the anchor, so a wrong column or a line number that has drifted is fine: it is searched for nearby, and a suggestion whose text is gone shows as out of date.
+
+| | |
+|---|---|
+| `]x` `[x` | next / previous suggestion |
+| `ga` / `gx` | accept (apply) / reject (drop) the suggestion at the cursor |
+| `K` | all suggestions on the line, with their full comments |
+| `:suggest` | list them in a picker |
+| `:accept!` `:reject!` | accept / reject all |
+
+Changes show on a red ground, insertions in green, comments underlined, and the message line shows the one under the cursor. Positions follow your edits, and the `.suggest` file is rewritten whenever the file is written (and when you accept or reject); it is deleted once empty. Changes made to it from outside are picked up within a second.
+
 ## As a library
 
 `mvi` is also a crate: `mvi::Editor` is the editor, `mvi::run(&mut ed, &mut input)` is the event loop (the caller owns raw mode and the `mtui::term::Input`), `mvi::edit_file(&mut input, path, line)` runs a full-screen session on a file, and `mvi::Pane` embeds the editor in a rectangle of the host's `mtui::screen::Screen`: the host passes it keys (`pane.key`), draws it (`pane.draw(&mut screen, (x, y), (w, h))`, which returns the cursor) and checks `pane.finished()`. mmail uses a pane to write messages.

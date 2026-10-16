@@ -19,6 +19,9 @@ NORMAL  h j k l w b e W B E ge 0 ^ $ gg G { } % f F t T ; , H M L  counts work
         ]e [e next/prev error · ]q [q quickfix · ]b [b buffers · ^^ alt buffer · ^S save
 SPELL   markdown/text files: ]s [s next/prev problem · z= suggestions/fix · zg add word
         (~/.config/mvi/words) · zG accept for this session · :spell list · :spellgood word
+SUGGEST FILE.suggest beside the file holds proposed edits with reasons (see mvi README):
+        ]x [x next/prev · ga accept · gx reject · K full comment · :suggest list
+        :accept! / :reject! all
 LEADER  <space>f files  <space>b buffers  <space>s symbols  <space>d diagnostics
         <space>/ grep  <space>c run checker  <space>y yank to system clipboard (OSC52)
 INSERT  Tab/^N/^P cycle completions, Enter accepts, ^Space force, ^W ^U ^R{reg} ^T ^D
@@ -167,7 +170,7 @@ impl Editor {
     fn cmd_complete(&mut self) {
         let Some(sp) = self.cmdline.rfind(' ') else {
             // complete command names
-            let cmds = ["write", "quit", "edit", "enew", "bnext", "bprev", "bdelete", "buffers", "set", "check", "checker", "diag", "grep", "files", "help", "nohlsearch", "spell", "spellgood", "preview", "mmd", "theme", "registers", "sort", "normal", "global", "substitute", "read", "pwd", "cd", "wall", "qall", "xit"];
+            let cmds = ["write", "quit", "edit", "enew", "bnext", "bprev", "bdelete", "buffers", "set", "check", "checker", "diag", "grep", "files", "help", "nohlsearch", "spell", "spellgood", "suggest", "accept", "reject", "preview", "mmd", "theme", "registers", "sort", "normal", "global", "substitute", "read", "pwd", "cd", "wall", "qall", "xit"];
             let m: Vec<&str> = cmds.iter().copied().filter(|c| c.starts_with(self.cmdline.as_str())).collect();
             if m.len() == 1 {
                 self.cmdline = m[0].to_string() + " ";
@@ -431,6 +434,9 @@ impl Editor {
             "g" | "global" | "v" | "vglobal" => self.global(range.unwrap_or((0, nl - 1)), args, name.starts_with('v') || args.starts_with('!')),
             "noh" | "nohlsearch" => self.show_hl = false,
             "spell" | "spe" => self.open_spell_picker(),
+            "suggest" | "sug" => self.open_suggest_picker(),
+            "accept" | "acc" => self.suggest_accept(bang),
+            "reject" | "rej" => self.suggest_reject(bang),
             "spellgood" | "spellg" => self.spell_good(Some(args), true),
             "set" | "se" => self.set(args),
             "check" | "make" | "mak" | "lint" => self.run_check(true),
