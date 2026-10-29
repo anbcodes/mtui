@@ -308,6 +308,7 @@ impl Editor {
         let pct = if b.lines.len() <= 1 { 100 } else { cy * 100 / (b.lines.len() - 1) };
         let (mname, mbg) = match mode {
             Mode::Normal => ("NORMAL", 110),
+            Mode::Insert if self.ovr => ("REPLACE", 209),
             Mode::Insert => ("INSERT", 114),
             Mode::Visual => ("VISUAL", 176),
             Mode::VisualLine => ("V-LINE", 176),
@@ -389,7 +390,7 @@ impl Editor {
         let scr_x = gw + cdc.saturating_sub(b.left);
         let scr_y = cy.saturating_sub(b.top);
         if cursor.is_none() {
-            cursor = Some((scr_x.min(w - 1), scr_y, mode == Mode::Insert));
+            cursor = Some((scr_x.min(w - 1), scr_y, mode == Mode::Insert && !self.ovr));
         }
 
         // completion popup

@@ -155,6 +155,7 @@ pub enum Key {
     BackTab,
     Backspace,
     Delete,
+    Insert,
     Up,
     Down,
     Left,
@@ -363,6 +364,7 @@ impl Input {
             b'~' => match first {
                 1 | 7 => Key::Home,
                 4 | 8 => Key::End,
+                2 => Key::Insert,
                 3 => Key::Delete,
                 5 => Key::PageUp,
                 6 => Key::PageDown,

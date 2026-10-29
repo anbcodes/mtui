@@ -140,6 +140,10 @@ pub struct Editor {
     jump_idx: usize,
     dot: Vec<Key>,
     dot_rec: Option<Vec<Key>>,
+    /// Overwrite (replace) mode in insert mode, and what each typed character
+    /// replaced (None: appended) so Backspace can put it back.
+    pub ovr: bool,
+    ovr_orig: Vec<Option<char>>,
     replaying: bool,
     mac_rec: Option<(char, Vec<Key>)>,
     macros: HashMap<char, Vec<Key>>,
@@ -357,6 +361,8 @@ impl Editor {
             jump_idx: 0,
             dot: Vec::new(),
             dot_rec: None,
+            ovr: false,
+            ovr_orig: Vec::new(),
             replaying: false,
             mac_rec: None,
             macros: HashMap::new(),
@@ -1477,6 +1483,7 @@ impl Editor {
 
     pub fn start_insert(&mut self) {
         self.mode = Mode::Insert;
+        self.ovr_orig.clear();
         self.comp = None;
     }
 
@@ -1910,7 +1917,11 @@ impl Editor {
         }
 
         match k {
-            Key::Char('i') => self.start_insert(),
+            Key::Char('i') | Key::Insert => self.start_insert(),
+            Key::Char('R') => {
+                self.ovr = true;
+                self.start_insert();
+            }
             Key::Char('a') => {
                 let l = &self.bb().lines[cy];
                 let x = if l.is_empty() { 0 } else { next_boundary(l, cx) };
@@ -2388,6 +2399,20 @@ impl Editor {
         self.set_cursor(end);
     }
 
+    /// Overwrite mode: remove the character under the cursor (if any, not
+    /// the line break) before a typed one goes in, remembering it.
+    fn overwrite_char(&mut self) {
+        let (cy, cx) = self.cursor();
+        let l = &self.bb().lines[cy];
+        if cx < l.len() {
+            let c = l[cx..].chars().next().unwrap();
+            self.b().delete((cy, cx), (cy, cx + c.len_utf8()));
+            self.ovr_orig.push(Some(c));
+        } else {
+            self.ovr_orig.push(None);
+        }
+    }
+
     fn insert_key(&mut self, k: Key) {
         if self.ins_reg_pending {
             self.ins_reg_pending = false;
@@ -2423,8 +2448,18 @@ impl Editor {
         }
         self.clamp();
         let (cy, cx) = self.cursor();
+        if !matches!(k, Key::Char(_) | Key::Backspace | Key::Ctrl('h') | Key::Paste(_) | Key::Insert) {
+            self.ovr_orig.clear();
+        }
         match k {
+            Key::Insert => {
+                self.ovr = !self.ovr;
+                self.ovr_orig.clear();
+                self.comp = None;
+                return;
+            }
             Key::Esc | Key::Ctrl('c') => {
+                self.ovr = false;
                 self.comp = None;
                 self.sym_cache = None;
                 self.mode = Mode::Normal;
@@ -2458,9 +2493,12 @@ impl Editor {
                         }
                     }
                 }
+                if self.ovr {
+                    self.overwrite_char();
+                }
                 let mut b = [0u8; 4];
                 self.insert_text(c.encode_utf8(&mut b));
-                if self.opts.autocomplete && (is_word(c) || c == '/' || c == '.') {
+                if self.opts.autocomplete && !self.ovr && (is_word(c) || c == '/' || c == '.') {
                     self.update_completion(false);
                 } else {
                     self.comp = None;
@@ -2468,6 +2506,11 @@ impl Editor {
                 return;
             }
             Key::Paste(s) => {
+                if self.ovr && !s.contains('\n') {
+                    for _ in s.chars() {
+                        self.overwrite_char();
+                    }
+                }
                 self.insert_text(&s);
             }
             Key::Enter => {
@@ -2504,6 +2547,20 @@ impl Editor {
                 } else {
                     self.insert_text(&format!("\n{}", ind));
                 }
+            }
+            Key::Backspace | Key::Ctrl('h') if self.ovr => {
+                // put back what the last typed character replaced; before the
+                // start of the typing just move left
+                let s = prev_boundary(&self.bb().lines[cy], cx);
+                if let Some(orig) = self.ovr_orig.pop() {
+                    self.b().delete((cy, s), (cy, cx));
+                    if let Some(o) = orig {
+                        let mut b = [0u8; 4];
+                        self.b().insert((cy, s), o.encode_utf8(&mut b));
+                    }
+                }
+                self.set_cursor((cy, s));
+                return;
             }
             Key::Backspace | Key::Ctrl('h') => {
                 if cx > 0 {
@@ -3102,5 +3159,28 @@ mod dot_tests {
         assert_eq!(e.cursor().0, 49);
         e.handle_key(Key::Tab);
         assert_eq!(e.cursor().0, 19);
+    }
+
+    #[test]
+    fn overwrite_mode() {
+        let mut e = Editor::new(80, 24);
+        e.b().lines = vec!["abcdef".into(), "xy".into()];
+        let mut keys = |e: &mut Editor, ks: &[Key]| ks.iter().for_each(|k| e.handle_key(k.clone()));
+        // R types over the text, past the end of the line it appends
+        keys(&mut e, &[Key::Char('R'), Key::Char('1'), Key::Char('2'), Key::Char('3')]);
+        assert_eq!(e.bb().lines[0], "123def");
+        // Backspace puts the original characters back
+        keys(&mut e, &[Key::Backspace, Key::Backspace]);
+        assert_eq!(e.bb().lines[0], "1bcdef");
+        keys(&mut e, &[Key::Esc]);
+        assert!(!e.ovr);
+        // Insert toggles it from insert mode; Esc ends it
+        keys(&mut e, &[Key::Char('j'), Key::Char('0'), Key::Char('A'), Key::Char('z'), Key::Insert, Key::Char('q'), Key::Insert, Key::Char('w'), Key::Esc]);
+        assert_eq!(e.bb().lines[1], "xyzqw");
+        keys(&mut e, &[Key::Char('k'), Key::Char('0'), Key::Char('R'), Key::Char('A'), Key::Char('B'), Key::Esc]);
+        assert_eq!(e.bb().lines[0], "ABcdef");
+        // `.` repeats it, overwriting again
+        keys(&mut e, &[Key::Char('0'), Key::Char('l'), Key::Char('l'), Key::Char('.')]);
+        assert_eq!(e.bb().lines[0], "ABABef");
     }
 }
