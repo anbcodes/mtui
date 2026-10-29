@@ -200,6 +200,17 @@ static LANGS: &[Lang] = &[
         ..lang("toml")
     },
     Lang {
+        exts: &["nix"],
+        line_comment: "#",
+        block: ("/*", "*/"),
+        strings: &[("\'\'", "\'\'", true), ("\"", "\"", true)],
+        keywords: &["if", "then", "else", "let", "in", "with", "rec", "inherit", "assert", "or", "import", "throw", "abort"],
+        types: &["builtins", "lib", "pkgs"],
+        consts: &["true", "false", "null"],
+        indent: 2,
+        ..lang("nix")
+    },
+    Lang {
         exts: &["yaml", "yml"],
         line_comment: "#",
         strings: &[("\"", "\"", false), ("'", "'", false)],
@@ -665,5 +676,19 @@ mod tests {
         assert_eq!(h[0], KEYWORD);
         assert_eq!(h[10], FUNC);
         assert_eq!(h[20], STRING);
+    }
+
+    #[test]
+    fn nix_detect_and_tokens() {
+        assert_eq!(detect(Path::new("flake.nix"), "").name, "nix");
+        let nix = by_name("nix").unwrap();
+        let mut h = Vec::new();
+        highlight(nix, "let x = 1; in # note", State::Normal, &mut h);
+        assert_eq!((h[0], h[8], h[14]), (KEYWORD, NUMBER, COMMENT));
+        // a ''...'' string runs over lines and ends at the closing quotes
+        let st = highlight(nix, "s = ''a", State::Normal, &mut h);
+        assert_eq!(h[4], STRING);
+        highlight(nix, "b''; true", st, &mut h);
+        assert_eq!((h[0], h[3], h[5]), (STRING, NORMAL, NUMBER));
     }
 }

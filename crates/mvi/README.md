@@ -79,9 +79,9 @@ Changes show on a red ground, insertions in green, comments underlined, and the 
 
 | | |
 |---|---|
-| Editing | Normal/insert/visual/visual-line modes, operators `d c y > < gc gu gU g~` with motions, counts and text objects (`iw aw i( a{ i" ip …`), registers (`"a`–`"z`, append with `"A`, `"0`, `"_`, `"+`), `.` repeat, macros (`q`/`@`), marks, undo/redo, `Ctrl-A`/`Ctrl-X`, auto-indent, bracket auto-dedent |
+| Editing | Normal/insert/visual/visual-line modes, operators `d c y > < gc gu gU g~` with motions, counts and text objects (`iw aw i( a{ i" ip …`), overwrite mode (`R`, or the Insert key in insert mode; Backspace puts the old text back), registers (`"a`–`"z`, append with `"A`, `"0`, `"_`, `"+`), `.` repeat, macros (`q`/`@`), marks, undo/redo, `Ctrl-A`/`Ctrl-X`, auto-indent, bracket auto-dedent |
 | Search | Built-in regex engine (PCRE-style subset with captures and smartcase), incremental search, highlighting, `* # n N`, `:s` with `\1` and `&`, `:g`/`:v` |
-| Syntax | Table-driven highlighter with per-line state caching. Supports Rust, C, C++, Python, JS/TS, Go, shell, JSON, TOML, YAML, Markdown, Lua, Java/Kotlin/C#/Swift, Ruby, Zig, Erlang, HTML/XML, CSS and SQL, plus Makefile and Dockerfile |
+| Syntax | Table-driven highlighter with per-line state caching. Supports Rust, C, C++, Python, JS/TS, Go, shell, JSON, TOML, YAML, Nix, Markdown, Lua, Java/Kotlin/C#/Swift, Ruby, Zig, Erlang, HTML/XML, CSS and SQL, plus Makefile and Dockerfile |
 | Spelling | Hunspell dictionaries, markdown-aware, with high-precision grammar rules. `]s [s` jump, `z=` suggests or fixes, `zg` adds a word (see below) |
 | Diagnostics | Runs the language's checker in a background thread on save (or with `:check` / `<space>c`). Shows gutter signs, underlines and inline messages. `]d [d ]e [e` jump through them, `K` shows the full text, `<space>d` lists them, `]q [q` work across files |
 | Completion | Pops up as you type. Sources are buffer words (ranked by distance from the cursor), symbols from all open buffers (with the definition line as a signature hint), language keywords, and file paths. Use `Tab`/`Ctrl-N`/`Ctrl-P` to select and `Enter` to accept |
