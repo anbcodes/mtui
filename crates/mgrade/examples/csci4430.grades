@@ -1,0 +1,11 @@
+# CSCI 4430 Programming Languages, Fall 2026 (Prof. Varela)
+#
+# Three programming assignments and three exams. In each group the best two
+# count 20% each and the lowest 10%, whichever order you did them in
+# (ranked=20,20,10). Exam grades may be curved. Three grace days cover late
+# assignments; past those a late assignment is a 0.
+course CSCI 4430 Programming Languages
+scale A 90, A- 86.67, B+ 83.33, B 80, B- 76.67, C+ 73.33, C 70, C- 66.67, D+ 63.33, D 60
+
+category Programming Assignments 50% n=3 ranked=20,20,10
+category Exams 50% n=3 ranked=20,20,10

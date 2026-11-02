@@ -1,0 +1,18 @@
+# CSCI 4380 Database Systems, Fall 2026 (Sibel Adali's syllabus)
+#
+# To pass you need an average of 60 across the midterms and the final,
+# whatever your homework and exercises are. Cutoffs are applied without rounding.
+course CSCI 4380 Database Systems
+scale A 93, A- 90, B+ 87, B 83, B- 80, C+ 77, C 73, C- 70, D+ 67, D 60
+require exams >= 60 rounded
+
+# Exercises can't be made up, but extra ones replace missed or low ones
+# (not modelled: add them as items). n= is a guess; change it as the term goes.
+category Lecture Exercises 30% n=24
+category Homework 26% n=8
+category Midterm 1 14% group=exams
+  Midterm 1 -
+category Midterm 2 14% group=exams
+  Midterm 2 -
+category Final Exam 16% group=exams
+  Final -

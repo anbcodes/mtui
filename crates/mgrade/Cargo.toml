@@ -1,0 +1,9 @@
+[package]
+name = "mgrade"
+version.workspace = true
+edition.workspace = true
+description = "A tiny grade predictor and viewer: a course's grading rules and your scores in one text file"
+
+[dependencies]
+libc.workspace = true
+mtui.workspace = true

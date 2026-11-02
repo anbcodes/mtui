@@ -80,6 +80,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mgrade"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mtui",
+]
+
+[[package]]
 name = "mhttp"
 version = "0.1.0"
 dependencies = [

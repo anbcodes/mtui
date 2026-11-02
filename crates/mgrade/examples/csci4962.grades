@@ -1,0 +1,12 @@
+# CSCI 4962/6962 Cloud Computing & Virtualization Technologies, Fall 2026 (Dr. Gilder's syllabus, 4000-level column)
+# Assignments and labs are one 45% block; the lowest homework is dropped.
+course CSCI 4962 Cloud Computing
+scale A 93, A- 90, B+ 87, B 83, B- 80, C+ 77, C 70, D 60
+
+category Assignments and Labs 45% n=20 drop=1
+category Exam 1 25% group=exams
+  Exam 1 -
+category Exam 2 25% group=exams
+  Exam 2 -
+category Class Contribution 5%
+  Contribution -

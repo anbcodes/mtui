@@ -10,6 +10,7 @@ A small family of fast, low-bandwidth terminal programs written in Rust. They sh
 | [`mmail`](crates/mmail) | A Fastmail client over JMAP, live-synced with the web client: folders, conversations, search, compose in your editor, drafts, attachments, archive / trash / move / label / star | ~2 MB |
 | [`mjira`](crates/mjira) | A Jira client (Cloud and Server): your issues, favourite filters and JQL search, a project board where `<` `>` move cards through the workflow, issue view with transitions, assign, comment, labels, work logs, attachments inline | ~2 MB |
 | [`msql`](crates/msql) | A SQL client: write queries in mvi with completion from the database's schema (tables after `FROM`, `alias.` columns, functions), save them, run them and browse the results. Cloudflare D1, PostgreSQL (via `psql`) and local SQLite files | ~2 MB |
+| [`mgrade`](crates/mgrade) | A grade predictor: a course's grading rules and your scores in one text file; shows where you stand, projects the rest and says what average you need on the remaining work for each letter. Drop-lowest, minimum-exam-average rules, absence penalties, what-if scores | ~0.6 MB |
 | [`mtheme`](crates/mtheme) | Pick a colour theme for each app independently (Classic and the four Evergarden seasons), with a live preview, and switch terminals such as kitty, ghostty and alacritty, and Firefox, too. Running apps follow within a second; `Ctrl-T` in any app steps to the next theme, `:theme NAME` in mvi | ~0.4 MB |
 | [`mmd`](crates/mmd) | A markdown renderer: clean printable HTML, a live-reloading browser preview, and scroll sync with mvi (`:mmd`) | ~0.6 MB |
 | [`mtui`](crates/mtui) | The shared terminal library (not a program) | |
@@ -55,6 +56,7 @@ crates/mmail/       Fastmail client
 crates/mjira/       Jira client
 crates/msql/        SQL client (D1, PostgreSQL, SQLite)
 crates/mmd/         markdown to HTML, live preview server
+crates/mgrade/      grade predictor and viewer
 crates/mtheme/      per-app and terminal colour themes
 crates/mhttp/       shared HTTP client
 crates/mimg/        shared image support

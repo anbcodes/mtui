@@ -1,0 +1,15 @@
+# PHIL 4480, Fall 2026
+# Three unexcused absences are free; each extra one costs a letter step
+# (A- becomes B+, then B, ...). Late papers lose points at the instructor's discretion.
+course PHIL 4480 Metaphysics
+scale A 93, A- 89, B+ 86, B 82, B- 79, C+ 75, C 70, C- 67, D+ 62, D 55
+absence-penalty free=3 step=1
+absent 0
+
+category Papers 42% n=2
+category Exam 1 23%
+  Exam 1 -
+category Exam 2 23%
+  Exam 2 -
+category Class Participation 12%
+  Participation -
