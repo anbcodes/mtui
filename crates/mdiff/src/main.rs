@@ -1,5 +1,6 @@
 mod app;
 mod diff;
+mod notes;
 
 use mtui::term;
 use std::path::PathBuf;
@@ -9,15 +10,21 @@ use std::time::Duration;
 
 fn usage() -> ! {
     println!(
-        "usage: mdiff [-b REF] [-x FILE] [DIR]   watch the changes in DIR's git tree (default .)
-       mdiff -p [-b REF] [DIR]          print the changed files and exit
+        "usage: mdiff [-b REF] [-n FILE] [-x FILE] [DIR]   watch the changes in DIR's git tree (default .)
+       mdiff -p [-b REF] [DIR]                   print the changed files and exit
 
 -b, --base REF    compare against REF instead of HEAD; commits made after it stay
                   in the diff, so `-b $(git rev-parse HEAD)` shows a whole session
--x, --notes FILE  show the newest `## ` entry of FILE (an explanation log)
+-n, --notes FILE  list FILE and the code it refers to (path:line, path:a-b) under
+                  the changes
+-x, --why FILE    show the newest `## ` entry of FILE (an explanation log, newest
+                  first) under the diff
     --no-mouse    leave the mouse to the terminal
 
-The diff updates within a second of any change, untracked files included, and
+In a tree with .claude/pair/ (see `pair`), its BASE, NOTES.md and EXPLANATION.md
+are the defaults for -b, -n and -x.
+
+The view updates within a second of any change, untracked files included, and
 jumps to it. Enter edits the file at the cursor in an mvi pane; ? shows every key."
     );
     std::process::exit(0);
@@ -30,7 +37,7 @@ fn die(s: impl std::fmt::Display) -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut base, mut notes, mut dir, mut print, mut mouse) = (None, None, None, false, true);
+    let (mut base, mut why, mut notes, mut dir, mut print, mut mouse) = (None, None, None, None, false, true);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -40,7 +47,8 @@ fn main() {
                 return;
             }
             "-b" | "--base" => base = Some(it.next().cloned().unwrap_or_else(|| usage())),
-            "-x" | "--notes" => notes = Some(PathBuf::from(it.next().unwrap_or_else(|| usage()))),
+            "-x" | "--why" => why = Some(PathBuf::from(it.next().unwrap_or_else(|| usage()))),
+            "-n" | "--notes" => notes = Some(PathBuf::from(it.next().unwrap_or_else(|| usage()))),
             "-p" | "--print" => print = true,
             "--no-mouse" => mouse = false,
             s if s.starts_with('-') => {
@@ -52,7 +60,12 @@ fn main() {
     }
     let dir = dir.unwrap_or_else(|| PathBuf::from("."));
     let root = PathBuf::from(diff::git(&dir, &["rev-parse", "--show-toplevel"]).unwrap_or_else(|e| die(e)).trim());
-    let base = base.unwrap_or_else(|| "HEAD".into());
+    // a pair session's files, unless given
+    let pair = root.join(".claude/pair");
+    let found = |name: &str| Some(pair.join(name)).filter(|p| p.is_file());
+    let base = base.or_else(|| std::fs::read_to_string(pair.join("BASE")).ok().map(|s| s.trim().to_string())).unwrap_or_else(|| "HEAD".into());
+    let why = why.or_else(|| found("EXPLANATION.md"));
+    let notes = notes.or_else(|| found("NOTES.md"));
     let sha = diff::git(&root, &["rev-parse", "--verify", &format!("{}^{{commit}}", base)]).unwrap_or_else(|e| die(format!("{}: {}", base, e)));
     let sha = sha.trim().to_string();
     let label = if base.len() == 40 && base.chars().all(|c| c.is_ascii_hexdigit()) { base[..8].to_string() } else { base };
@@ -86,7 +99,7 @@ fn main() {
     }
 
     let (w, h) = term::size();
-    let mut app = app::App::new(w, h, root, label, notes);
+    let mut app = app::App::new(w, h, root, label, why, notes);
     term::set_mouse(mouse);
     mtui::theme::init("mdiff");
     if let Err(e) = term::enable_raw() {
