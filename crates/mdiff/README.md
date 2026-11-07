@@ -4,13 +4,14 @@
 
 ```sh
 cargo build --release -p mdiff
-mdiff                                  # changes in this repo since HEAD
-mdiff -b "$(git rev-parse HEAD)" DIR   # since now: later commits stay in the diff
+mdiff                                  # this branch: everything since it came off its parent
+mdiff -b origin/main DIR               # since DIR's branch forked from origin/main
 mdiff -n NOTES.md -x EXPLANATION.md    # also list notes and their code, and show a log
 mdiff -p                               # print the changed files and exit
 ```
 
-- **Live.** A background thread re-reads `git diff BASE` and the untracked files twice a second and redraws only when something changed. With follow on (`f`, the default) the view jumps to the first file that changed and puts the change a third of the way down.
+- **The whole branch.** The diff runs from where the branch forked from its parent, uncommitted and untracked files included: the parent is `-b REF`, else the branch it was created from (as git recorded it), else the remote's default branch. The fork point is recomputed as you go, so merging the parent in later doesn't bring its changes into view.
+- **Live.** A background thread re-reads the diff and the untracked files twice a second and redraws only when something changed. With follow on (`f`, the default) the view jumps to the first file that changed and puts the change a third of the way down.
 - **Fresh lines.** A `▎` in the gutter marks the lines added by the change that last touched the file, so a long diff still shows what just happened. Files with fresh lines are bold in the list.
 - **Edit in place.** Enter (or `e`) opens the file at the line under the cursor in an embedded mvi, with your mvi config; a deleted line opens where it was. `Ctrl-W` from normal mode switches between the diff and the editor, `:w` saves and the diff above updates, `:q` closes the pane. Enter on another file opens it as another buffer. Buffers you haven't modified follow changes made on disk, so a save never writes back a stale copy; if the file changes under unsaved edits, the status line says so (`:e!` takes the version on disk).
 - **Notes.** With `-n FILE`, the list has a second group: the notes file, then every code location it mentions (`path:line`, `path:from-to`, or a bare path, as long as the file exists). The notes view marks the lines that refer to code with `›`, and Enter on one goes to it. A location opens the file at those lines, highlighted, with the notes line it came from pinned above and this session's added lines shown as added; locations in changed files say so. Both follow the files as they change, and a change elsewhere is announced on the status line instead of pulling you away from what you're reading.

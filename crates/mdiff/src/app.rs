@@ -116,6 +116,8 @@ pub struct App {
     pub suspend: bool,
     root: PathBuf,
     base: String,
+    /// Where HEAD forked from `base`, short.
+    fork: String,
     files: Vec<File>,
     /// Per file, per row: added by the change that last touched the file.
     fresh: Vec<Vec<bool>>,
@@ -195,6 +197,7 @@ impl App {
             suspend: false,
             root,
             base,
+            fork: String::new(),
             files: vec![],
             fresh: vec![],
             loaded: false,
@@ -229,9 +232,12 @@ impl App {
     }
 
     /// A new snapshot from the watcher.
-    pub fn on_snapshot(&mut self, r: Result<Vec<File>, String>) {
+    pub fn on_snapshot(&mut self, r: Result<(String, Vec<File>), String>) {
         let mut files = match r {
-            Ok(f) => f,
+            Ok((fork, f)) => {
+                self.fork = fork.chars().take(8).collect();
+                f
+            }
             Err(e) => {
                 self.err = e;
                 return;
@@ -709,7 +715,8 @@ impl App {
         self.screen.fill(0, w, 0, bar);
         let name = self.root.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
         let x = self.screen.puts(1, 0, &format!("mdiff {}", name), Style::new(ACCENT, BAR, BOLD), w);
-        self.screen.puts(x + 1, 0, &format!("since {}", self.base), Style::new(DIM, BAR, 0), w);
+        let since = if self.fork.is_empty() || self.base.starts_with(&self.fork) { self.base.clone() } else { format!("{} @ {}", self.base, self.fork) };
+        self.screen.puts(x + 1, 0, &format!("since {}", since), Style::new(DIM, BAR, 0), w);
         let (a, d) = self.files.iter().fold((0, 0), |(a, d), f| (a + f.add, d + f.del));
         let nf = self.files.len();
         let right = format!("{} file{}  +{} -{}{}", nf, if nf == 1 { "" } else { "s" }, a, d, if self.follow { "  follow" } else { "" });

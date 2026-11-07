@@ -50,6 +50,38 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// The branch the current one came off, to diff from: the one its creation
+/// was recorded against (`git branch`, `git worktree add -b`), else the
+/// remote's default branch, else HEAD. A branch recorded only as a commit
+/// falls through to the default branch, whose merge-base is the same commit
+/// until that branch is merged in.
+pub fn parent_ref(root: &Path) -> String {
+    let resolves = |r: &str| git(root, &["rev-parse", "--verify", "-q", &format!("{}^{{commit}}", r)]).is_ok();
+    let branch = git(root, &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default();
+    let branch = branch.trim();
+    if !branch.is_empty() {
+        let log = git(root, &["reflog", "show", "--format=%gs", &format!("refs/heads/{}", branch)]).unwrap_or_default();
+        if let Some(from) = log.lines().last().and_then(|l| l.strip_prefix("branch: Created from ")) {
+            let named = from != "HEAD" && from != branch && !from.chars().all(|c| c.is_ascii_hexdigit());
+            if named && resolves(from) {
+                return from.to_string();
+            }
+        }
+    }
+    let def = git(root, &["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]).unwrap_or_default();
+    let def = def.trim();
+    if !def.is_empty() && resolves(def) {
+        return def.to_string();
+    }
+    "HEAD".into()
+}
+
+/// Where HEAD forked from `parent`: their merge-base.
+pub fn fork_point(root: &Path, parent: &str) -> Result<String, String> {
+    let s = git(root, &["merge-base", "HEAD", parent]).map_err(|e| if e == "git failed" { format!("{} has no common history with HEAD", parent) } else { e })?;
+    Ok(s.trim().to_string())
+}
+
 /// Every change in the tree at `root` since commit `base`, sorted by path.
 pub fn snapshot(root: &Path, base: &str) -> Result<Vec<File>, String> {
     let patch = git(root, &["diff", "--no-color", "--no-ext-diff", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", base, "--"])?;

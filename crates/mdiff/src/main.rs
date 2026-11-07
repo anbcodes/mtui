@@ -13,8 +13,10 @@ fn usage() -> ! {
         "usage: mdiff [-b REF] [-n FILE] [-x FILE] [DIR]   watch the changes in DIR's git tree (default .)
        mdiff -p [-b REF] [DIR]                   print the changed files and exit
 
--b, --base REF    compare against REF instead of HEAD; commits made after it stay
-                  in the diff, so `-b $(git rev-parse HEAD)` shows a whole session
+-b, --base REF    the branch (or commit) this one came off; the diff is from where
+                  HEAD forked from it, recomputed as you go, so merging REF in later
+                  doesn't bring its changes into view. Default: the branch the
+                  current one was created from, else the remote's default branch
 -n, --notes FILE  list FILE and the code it refers to (path:line, path:a-b) under
                   the changes
 -x, --why FILE    show the newest `## ` entry of FILE (an explanation log, newest
@@ -63,15 +65,14 @@ fn main() {
     // a pair session's files, unless given
     let pair = root.join(".claude/pair");
     let found = |name: &str| Some(pair.join(name)).filter(|p| p.is_file());
-    let base = base.or_else(|| std::fs::read_to_string(pair.join("BASE")).ok().map(|s| s.trim().to_string())).unwrap_or_else(|| "HEAD".into());
+    let base = base.or_else(|| std::fs::read_to_string(pair.join("BASE")).ok().map(|s| s.trim().to_string())).unwrap_or_else(|| diff::parent_ref(&root));
     let why = why.or_else(|| found("EXPLANATION.md"));
     let notes = notes.or_else(|| found("NOTES.md"));
-    let sha = diff::git(&root, &["rev-parse", "--verify", &format!("{}^{{commit}}", base)]).unwrap_or_else(|e| die(format!("{}: {}", base, e)));
-    let sha = sha.trim().to_string();
-    let label = if base.len() == 40 && base.chars().all(|c| c.is_ascii_hexdigit()) { base[..8].to_string() } else { base };
+    let fork = diff::fork_point(&root, &base).unwrap_or_else(|e| die(format!("{}: {}", base, e)));
+    let label = if base.len() == 40 && base.chars().all(|c| c.is_ascii_hexdigit()) { base[..8].to_string() } else { base.clone() };
 
     if print || !term::is_tty() {
-        for f in diff::snapshot(&root, &sha).unwrap_or_else(|e| die(e)) {
+        for f in diff::snapshot(&root, &fork).unwrap_or_else(|e| die(e)) {
             println!("{} {:>5} {:>5}  {}", f.status, format!("+{}", f.add), format!("-{}", f.del), f.name);
         }
         return;
@@ -81,11 +82,12 @@ fn main() {
     let waker = term::Waker::new();
     let (tx, rx) = mpsc::channel();
     {
-        let (root, sha) = (root.clone(), sha.clone());
+        let (root, base) = (root.clone(), base.clone());
         std::thread::spawn(move || {
             let mut last = None;
             loop {
-                let r = diff::snapshot(&root, &sha);
+                // the fork point moves when the parent branch is merged in
+                let r = diff::fork_point(&root, &base).and_then(|fork| diff::snapshot(&root, &fork).map(|f| (fork, f)));
                 if last.as_ref() != Some(&r) {
                     last = Some(r.clone());
                     if tx.send(r).is_err() {
