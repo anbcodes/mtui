@@ -50,23 +50,48 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The branch the current one came off, to diff from: the one its creation
-/// was recorded against (`git branch`, `git worktree add -b`), else the
-/// remote's default branch, else HEAD. A branch recorded only as a commit
-/// falls through to the default branch, whose merge-base is the same commit
-/// until that branch is merged in.
+/// What local branch `b` was created from, as git recorded it: a ref, or for
+/// `checkout -b` / `switch -c` (recorded as "HEAD") the branch HEAD moved from.
+fn created_from(root: &Path, b: &str) -> Option<String> {
+    let log = git(root, &["reflog", "show", "--format=%gs", &format!("refs/heads/{}", b)]).ok()?;
+    let from = log.lines().last()?.strip_prefix("branch: Created from ")?;
+    if from != "HEAD" {
+        return Some(from.to_string());
+    }
+    let head = git(root, &["reflog", "show", "--format=%gs", "HEAD"]).ok()?;
+    let to = format!(" to {}", b);
+    head.lines().rev().filter_map(|l| l.strip_prefix("checkout: moving from ")).find_map(|l| l.strip_suffix(to.as_str()).map(String::from))
+}
+
+/// The branch the current one came off, to diff from. Follows the recorded
+/// creations back through local branches (a branch made from a branch made
+/// from origin/staging came off origin/staging) and stops at the first
+/// remote branch; at a local branch with no record, at that branch's
+/// upstream or the branch itself. With no record at all, or one that names
+/// only a commit, the remote's default branch, else HEAD.
 pub fn parent_ref(root: &Path) -> String {
     let resolves = |r: &str| git(root, &["rev-parse", "--verify", "-q", &format!("{}^{{commit}}", r)]).is_ok();
-    let branch = git(root, &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default();
-    let branch = branch.trim();
-    if !branch.is_empty() {
-        let log = git(root, &["reflog", "show", "--format=%gs", &format!("refs/heads/{}", branch)]).unwrap_or_default();
-        if let Some(from) = log.lines().last().and_then(|l| l.strip_prefix("branch: Created from ")) {
-            let named = from != "HEAD" && from != branch && !from.chars().all(|c| c.is_ascii_hexdigit());
-            if named && resolves(from) {
-                return from.to_string();
+    let local = |r: &str| git(root, &["show-ref", "--verify", "-q", &format!("refs/heads/{}", r)]).is_ok();
+    let is_sha = |r: &str| r.len() >= 7 && r.chars().all(|c| c.is_ascii_hexdigit());
+    let start = git(root, &["symbolic-ref", "--short", "-q", "HEAD"]).unwrap_or_default().trim().to_string();
+    let mut b = start.clone();
+    let mut seen = vec![];
+    while !b.is_empty() && !seen.contains(&b) && seen.len() < 16 {
+        seen.push(b.clone());
+        match created_from(root, &b) {
+            Some(from) if !is_sha(&from) && resolves(&from) && !seen.contains(&from) => {
+                if !local(&from) {
+                    return from;
+                }
+                b = from;
             }
+            _ => break,
         }
+    }
+    if !b.is_empty() && b != start {
+        let up = git(root, &["rev-parse", "--abbrev-ref", &format!("{}@{{upstream}}", b)]).unwrap_or_default();
+        let up = up.trim();
+        return if up.is_empty() { b } else { up.to_string() };
     }
     let def = git(root, &["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]).unwrap_or_default();
     let def = def.trim();
