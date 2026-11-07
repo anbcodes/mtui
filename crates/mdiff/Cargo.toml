@@ -1,0 +1,10 @@
+[package]
+name = "mdiff"
+version.workspace = true
+edition.workspace = true
+description = "A live diff of a git working tree, with an mvi pane to edit what you see"
+
+[dependencies]
+libc.workspace = true
+mtui.workspace = true
+mvi.workspace = true

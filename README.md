@@ -12,6 +12,7 @@ A small family of fast, low-bandwidth terminal programs written in Rust. They sh
 | [`msql`](crates/msql) | A SQL client: write queries in mvi with completion from the database's schema (tables after `FROM`, `alias.` columns, functions), save them, run them and browse the results. Cloudflare D1, PostgreSQL (via `psql`) and local SQLite files | ~2 MB |
 | [`mgrade`](crates/mgrade) | A grade predictor: a course's grading rules and your scores in one text file; shows where you stand, projects the rest and says what average you need on the remaining work for each letter. Drop-lowest, minimum-exam-average rules, absence penalties, what-if scores | ~0.6 MB |
 | [`mtheme`](crates/mtheme) | Pick a colour theme for each app independently (Classic and the four Evergarden seasons), with a live preview, and switch terminals such as kitty, ghostty and alacritty, and Firefox, too. Running apps follow within a second; `Ctrl-T` in any app steps to the next theme, `:theme NAME` in mvi | ~0.4 MB |
+| [`mdiff`](crates/mdiff) | A live diff of a git working tree: changed files, highlighted diffs that update as the files change, the lines just added marked, an explanation log beside them, and an mvi pane to edit the file at the cursor | ~1.5 MB |
 | [`mmd`](crates/mmd) | A markdown renderer: clean printable HTML, a live-reloading browser preview, and scroll sync with mvi (`:mmd`) | ~0.6 MB |
 | [`mtui`](crates/mtui) | The shared terminal library (not a program) | |
 | [`mhttp`](crates/mhttp) | The shared HTTP/1.1 client (not a program) | |
@@ -56,6 +57,7 @@ crates/mmail/       Fastmail client
 crates/mjira/       Jira client
 crates/msql/        SQL client (D1, PostgreSQL, SQLite)
 crates/mmd/         markdown to HTML, live preview server
+crates/mdiff/       live git diff viewer with an editor pane
 crates/mgrade/      grade predictor and viewer
 crates/mtheme/      per-app and terminal colour themes
 crates/mhttp/       shared HTTP client
