@@ -281,13 +281,109 @@ pub fn parse(p: &str) -> Vec<File> {
     files
 }
 
-/// The line of the working file to edit for row `i`: its own new-side line,
-/// else the next one below it, else the one above.
-pub fn edit_line(rows: &[Row], i: usize) -> usize {
-    let line = |r: &Row| if r.kind == RK::Del || r.kind == RK::Note { 0 } else { r.new };
-    let below = rows.iter().skip(i).map(line).find(|&n| n > 0);
-    let above = || rows.iter().take(i).rev().map(line).find(|&n| n > 0);
-    below.or_else(above).unwrap_or(1) as usize
+/// The text of `path` (from its repo's root) at commit `rev`, by lines; empty
+/// when it isn't there (a file added since).
+pub fn file_at(root: &Path, rev: &str, path: &str) -> Vec<String> {
+    git(root, &["show", &format!("{}:{}", rev, path)]).map(|s| s.lines().map(String::from).collect()).unwrap_or_default()
+}
+
+/// A changed stretch: lines `old` of the old text became lines `new` of the new.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Hunk {
+    pub old: std::ops::Range<usize>,
+    pub new: std::ops::Range<usize>,
+}
+
+/// Past this many edits, the middle is called one replaced block.
+const MAX_EDITS: usize = 4000;
+
+/// The hunks that turn `a` into `b` (Myers' algorithm, after trimming what
+/// they start and end with in common).
+pub fn line_hunks<S: AsRef<str>, T: AsRef<str>>(a: &[S], b: &[T]) -> Vec<Hunk> {
+    let eq = |i: usize, j: usize| a[i].as_ref() == b[j].as_ref();
+    let mut pre = 0;
+    while pre < a.len() && pre < b.len() && eq(pre, pre) {
+        pre += 1;
+    }
+    let mut suf = 0;
+    while suf < a.len() - pre && suf < b.len() - pre && eq(a.len() - 1 - suf, b.len() - 1 - suf) {
+        suf += 1;
+    }
+    let (n, m) = (a.len() - pre - suf, b.len() - pre - suf);
+    if n == 0 && m == 0 {
+        return vec![];
+    }
+    // the matched (i, j) pairs of the middle, in order; none past MAX_EDITS
+    let pairs = myers(n, m, |i, j| eq(pre + i, pre + j)).unwrap_or_default();
+    let mut out: Vec<Hunk> = Vec::new();
+    let mut push = |i0: usize, i1: usize, j0: usize, j1: usize| {
+        if i0 < i1 || j0 < j1 {
+            out.push(Hunk { old: pre + i0..pre + i1, new: pre + j0..pre + j1 });
+        }
+    };
+    let (mut i, mut j) = (0, 0);
+    for &(mi, mj) in &pairs {
+        push(i, mi, j, mj);
+        (i, j) = (mi + 1, mj + 1);
+    }
+    push(i, n, j, m);
+    out
+}
+
+/// The matched pairs of a shortest edit script between sequences of `n` and
+/// `m` items, or None past `MAX_EDITS` edits.
+fn myers(n: usize, m: usize, eq: impl Fn(usize, usize) -> bool) -> Option<Vec<(usize, usize)>> {
+    let (n, m) = (n as isize, m as isize);
+    let max = (n + m) as usize;
+    let off = max as isize + 1;
+    let mut v = vec![0isize; 2 * max + 3];
+    // v as it was before each round, for walking back
+    let mut trace: Vec<Vec<isize>> = Vec::new();
+    for d in 0..=max.min(MAX_EDITS) as isize {
+        trace.push(v[(off - d - 1) as usize..=(off + d + 1) as usize].to_vec());
+        let mut k = -d;
+        while k <= d {
+            let at = |k: isize| v[(off + k) as usize];
+            let mut x = if k == -d || (k != d && at(k - 1) < at(k + 1)) { at(k + 1) } else { at(k - 1) + 1 };
+            let mut y = x - k;
+            while x < n && y < m && eq(x as usize, y as usize) {
+                x += 1;
+                y += 1;
+            }
+            v[(off + k) as usize] = x;
+            if x >= n && y >= m {
+                return Some(walk_back(&trace, n, m, &eq));
+            }
+            k += 2;
+        }
+    }
+    None
+}
+
+fn walk_back(trace: &[Vec<isize>], n: isize, m: isize, eq: &impl Fn(usize, usize) -> bool) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    let (mut x, mut y) = (n, m);
+    for (d, v) in trace.iter().enumerate().rev() {
+        let d = d as isize;
+        // trace[d] holds v[-d-1 ..= d+1] from before round d
+        let at = |k: isize| v[(k + d + 1) as usize];
+        let k = x - y;
+        let (px, py) = if d == 0 {
+            (0, 0)
+        } else {
+            let pk = if k == -d || (k != d && at(k - 1) < at(k + 1)) { k + 1 } else { k - 1 };
+            (at(pk), at(pk) - pk)
+        };
+        // back along the run of matches to just after that round's one edit
+        while x > px && y > py && eq((x - 1) as usize, (y - 1) as usize) {
+            pairs.push(((x - 1) as usize, (y - 1) as usize));
+            x -= 1;
+            y -= 1;
+        }
+        (x, y) = (px, py);
+    }
+    pairs.reverse();
+    pairs
 }
 
 #[cfg(test)]
@@ -336,6 +432,35 @@ deleted file mode 100644
         assert_eq!(got, vec![(Hunk, 1, 1), (Ctx, 1, 1), (Del, 2, 0), (Add, 0, 2), (Add, 0, 3), (Ctx, 3, 4)]);
     }
 
+    /// The hunks must turn a into b, touching no more lines than needed.
+    fn apply(a: &[&str], b: &[&str], edits: usize) {
+        let hs = line_hunks(a, b);
+        let mut out: Vec<&str> = Vec::new();
+        let mut i = 0;
+        for h in &hs {
+            out.extend(&a[i..h.old.start]);
+            out.extend(&b[h.new.clone()]);
+            i = h.old.end;
+        }
+        out.extend(&a[i..]);
+        assert_eq!(out, b, "{:?}", hs);
+        assert_eq!(hs.iter().map(|h| h.old.len() + h.new.len()).sum::<usize>(), edits, "{:?}", hs);
+    }
+
+    #[test]
+    fn line_diff() {
+        assert_eq!(line_hunks(&["a", "b", "c"], &["a", "B", "c"]), vec![Hunk { old: 1..2, new: 1..2 }]);
+        assert_eq!(line_hunks(&["a", "c"], &["a", "b", "c"]), vec![Hunk { old: 1..1, new: 1..2 }]);
+        assert_eq!(line_hunks(&["a", "b", "c"], &["a", "c"]), vec![Hunk { old: 1..2, new: 1..1 }]);
+        assert!(line_hunks(&["x"], &["x"]).is_empty());
+        let empty: [&str; 0] = [];
+        assert_eq!(line_hunks(&empty, &["a", "b"]), vec![Hunk { old: 0..0, new: 0..2 }]);
+        apply(&["a", "b", "c", "d", "e", "f"], &["a", "x", "c", "e", "f", "g"], 4);
+        apply(&["1", "2", "3", "4", "5", "6", "7"], &["0", "2", "3", "9", "5", "7", "8"], 6);
+        apply(&["a", "b", "c", "a", "b", "b", "a"], &["c", "b", "a", "b", "a", "c"], 5);
+        apply(&empty, &empty, 0);
+    }
+
     #[test]
     fn finds_checkouts_not_symlinks() {
         let top = std::env::temp_dir().join(format!("mdiff-find-{}", std::process::id()));
@@ -347,15 +472,5 @@ deleted file mode 100644
         std::os::unix::fs::symlink(top.join("System"), top.join("Modules/Linked")).unwrap();
         assert_eq!(find_repos(&top), vec!["Modules/Core", "System"]);
         std::fs::remove_dir_all(&top).unwrap();
-    }
-
-    #[test]
-    fn lines_to_edit() {
-        let r = &parse(PATCH)[0].rows;
-        assert_eq!(edit_line(r, 0), 1); // hunk header: its first line
-        assert_eq!(edit_line(r, 2), 2); // deleted line: where it was, the next new line
-        assert_eq!(edit_line(r, 5), 4);
-        let gone = &parse(PATCH)[2].rows;
-        assert_eq!(edit_line(gone, 1), 1);
     }
 }

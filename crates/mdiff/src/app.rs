@@ -1,20 +1,22 @@
-// The viewer: changed files down the side, then a notes file and the code
-// it refers to. The main view shows the selected file's diff (syntax
-// highlighted, the lines added by the latest change marked), the notes, or
-// the referenced file with those lines picked out. Under it, the newest
-// entry of an explanation log, and an mvi pane to edit at the cursor while
-// everything above keeps updating.
+// The viewer: the changed files down the side (by repo in a tree of
+// checkouts), then a notes file and the code it points at, beside one mvi
+// editor. A changed file opens in the editor with its diff drawn inline:
+// what the parent branch had shows above where it was, added lines are
+// tinted, unchanged stretches fold away. It is the file itself, so editing
+// it works as in mvi and the diff follows as you type. The newest entry of
+// an explanation log shows under the editor.
 
-use crate::diff::{self, File, Head, Row, RK};
+use crate::diff::{self, File, Head, RK};
 use crate::notes::{self, Ref};
 use mtui::screen::{Screen, Style, BOLD, ITALIC};
 use mtui::sidebar;
-use mtui::syntax::{self, State};
 use mtui::term::{Key, Mouse, MouseKind};
 use mtui::wrap::wrap;
-use std::collections::HashSet;
+use mvi::editor::Mode;
+use mvi::view::{Decor, Fold, Virt};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 const TEXT: u8 = 252;
 const DIM: u8 = 246;
@@ -22,38 +24,35 @@ const ACCENT: u8 = 180;
 const OK: u8 = 114;
 const BAD: u8 = 203;
 const WARN: u8 = 209;
-const HUNK: u8 = 73;
 const FRESH: u8 = 220;
 const BAR: u8 = 236;
 const BG_ADD: u8 = 22;
 const BG_DEL: u8 = 52;
-const BG_ADD_CUR: u8 = 28;
-const BG_DEL_CUR: u8 = 88;
-const BG_CUR: u8 = 238;
 const BG_RANGE: u8 = 24;
 const BG_NOTE: u8 = 235;
 
+/// Unchanged lines kept in view on each side of a change.
+const CONTEXT: usize = 3;
+
 const HELP: &[&str] = &[
-    "j k  ↓ ↑       move          Ctrl-D Ctrl-U  half a page   g G  top, bottom",
-    "J K  Tab       next / previous item in the list (files, notes, references)",
-    "n N            next / previous hunk; in the notes, line with a reference;",
-    "               in a referenced file, block of changed lines",
-    "← →            scroll sideways",
-    "Enter          edit the file at this line in an mvi pane below the view;",
-    "               in the notes, go to the code the line refers to",
-    "e              edit here (in the notes: edit the notes)",
-    "Ctrl-W         switch between the view and the pane (from normal mode)",
-    "               :w saves and the view updates; :q closes the pane",
-    "f              follow: jump to whatever changes next (on at start)",
-    "x              show / hide the latest explanation entry",
-    "s              show / hide the list",
-    "q              quit",
+    "The editor is mvi on the file itself; its diff is drawn in:",
+    "  red rows above a line   what the parent branch had there (not part of the file)",
+    "  green lines             added or changed     ▎ in the gutter: by the latest change",
+    "  ▸ ⋯ rows                folded lines         blue lines: a note's reference",
     "",
-    "▎ marks lines added by the latest change, › notes lines that refer to code,",
-    "and a blue background the lines a reference points at.",
+    "In the editor (all of mvi, plus):",
+    "  ]c [c       next / previous change      ]f [f    next / previous file in the list",
+    "  za zo zc    toggle / open / close the fold at the cursor (a change folds too)",
+    "  zR zM       open / close every fold     Enter or a click on a fold opens it",
+    "  Enter       in the notes, on a line that refers to code: go there",
+    "  Ctrl-W      to the list               :w save    :q quit",
+    "",
+    "In the list:",
+    "  j k  g G    pick a file, the notes or a reference (it opens as you go)",
+    "  Enter Tab   to the editor   f follow changes   x explanation   s hide the list   q quit",
 ];
 
-/// What the main view shows.
+/// What the editor shows, from the list.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Item {
     File(usize),
@@ -61,25 +60,18 @@ enum Item {
     Ref(usize),
 }
 
-/// How a view's marked rows are drawn.
-#[derive(Clone, Copy, PartialEq, Default)]
-enum Mark {
-    /// added by the latest change: a bar in the gutter
-    #[default]
-    Fresh,
-    /// a notes line that refers to code
-    Link,
-    /// the lines a reference points at: a background
-    Range,
+#[derive(Clone, Copy, PartialEq)]
+enum Focus {
+    List,
+    Editor,
 }
 
-/// The rows of the current item, rebuilt when it or the data changes.
-#[derive(Default)]
-struct View {
-    rows: Vec<Row>,
-    mark: Vec<bool>,
-    hl: Vec<Vec<u8>>,
-    kind: Mark,
+/// What a fold of the current layout stands for, by lines of the parent's
+/// text, so its open state survives re-layouts as the file is edited.
+#[derive(Clone, Copy)]
+struct FoldKey {
+    hunk: bool,
+    old: (usize, usize),
 }
 
 /// A notes or log file: where it is, given and inside the tree, and when it
@@ -108,6 +100,11 @@ impl Watched {
         self.stamp = m;
         Some(std::fs::read_to_string(&self.path).unwrap_or_default())
     }
+
+    /// Whether the file at `p` (named `name` in the tree) is this one.
+    fn is(&self, p: &Path, name: &str) -> bool {
+        self.path == p || self.rel.as_deref() == Some(name)
+    }
 }
 
 pub struct App {
@@ -122,25 +119,29 @@ pub struct App {
     /// Per file, per row: added by the change that last touched the file.
     fresh: Vec<Vec<bool>>,
     loaded: bool,
-    item: Item,
-    view: View,
-    view_key: Option<(Item, u64)>,
-    /// Bumped whenever anything a view is built from changes.
+    item: Option<Item>,
+    focus: Focus,
+    pane: Option<mvi::Pane>,
+    /// Each changed file's text at its fork point, by name, with that fork.
+    bases: HashMap<String, (String, Vec<String>)>,
+    /// What the editor's decoration was built from: buffer, its version, `ver`.
+    decor_key: Option<(PathBuf, u64, u64)>,
+    decor_name: String,
+    fold_keys: Vec<FoldKey>,
+    /// Per file: unchanged stretches opened (by the parent's lines), and
+    /// changes folded away (by where they start in the parent).
+    opened: HashMap<String, Vec<(usize, usize)>>,
+    shut: HashMap<String, HashSet<usize>>,
+    /// Bumped whenever the snapshot or the notes change.
     ver: u64,
-    cursor: usize,
-    top: usize,
-    /// Bring the cursor into view on the next draw (false after wheel scrolls).
-    keep: bool,
-    hscroll: usize,
     follow: bool,
     side: bool,
     side_st: sidebar::State,
     geo: sidebar::Geo,
     /// The item index (into `items()`) of each sidebar row, from the last draw.
     side_targets: Vec<Option<usize>>,
-    /// x, y, w, h of the view and of the pane, from the last draw.
-    view_at: (usize, usize, usize, usize),
-    pane_at: (usize, usize, usize, usize),
+    /// x, y, w, h of the editor, from the last draw.
+    edit_at: (usize, usize, usize, usize),
     why: Option<Watched>,
     entry: Vec<String>,
     show_entry: bool,
@@ -149,8 +150,9 @@ pub struct App {
     refs: Vec<Ref>,
     /// The notes changed since they were last looked at.
     notes_new: bool,
-    pane: Option<mvi::Pane>,
-    pane_focus: bool,
+    /// `]` or `[` typed in the editor, waiting to see if `f` follows.
+    prefix: Option<char>,
+    last_key: Instant,
     help: bool,
     msg: String,
     err: String,
@@ -189,6 +191,61 @@ fn first_change(old: &File, new: &File) -> usize {
     (0..new.rows.len()).find(|&k| old.rows.get(k) != Some(&new.rows[k])).unwrap_or(new.rows.len().saturating_sub(1))
 }
 
+/// The inline diff of `lines` against `base` as editor decorations, with
+/// the keys of its folds. Without a base only the reference range (`range`,
+/// 1-based) and the notes lines that refer to code (`links`) are marked.
+fn layout(lines: &[String], base: Option<&[String]>, fresh: &HashSet<&str>, opened: &[(usize, usize)], shut: &HashSet<usize>, range: Option<(usize, usize)>, links: &[usize]) -> (Option<Decor>, Vec<FoldKey>) {
+    let n = lines.len();
+    let mut d = Decor { bg: vec![0; n], mark: vec![(' ', 0); n], ..Decor::default() };
+    let mut keys = Vec::new();
+    let hunks = base.map(|b| diff::line_hunks(b, lines)).unwrap_or_default();
+    // an unchanged stretch, all but CONTEXT lines next to a change folded away
+    let stretch = |d: &mut Decor, keys: &mut Vec<FoldKey>, (s, e): (usize, usize), old: usize, before: bool, after: bool| {
+        let a = s + if before { CONTEXT } else { 0 };
+        let z = e.saturating_sub(if after { CONTEXT } else { 0 });
+        if z >= a + 4 {
+            let (oa, ob) = (old + (a - s), old + (z - s) - 1);
+            let open = opened.iter().any(|&(x, y)| x <= ob && oa <= y);
+            d.folds.push(Fold { a, b: z - 1, open, label: format!("{} unchanged lines", z - a), hides_above: false });
+            keys.push(FoldKey { hunk: false, old: (oa, ob) });
+        }
+    };
+    let (mut ne, mut oe) = (0, 0);
+    for (i, h) in hunks.iter().enumerate() {
+        stretch(&mut d, &mut keys, (ne, h.new.start), oe, i > 0, true);
+        if let (false, Some(base)) = (h.old.is_empty(), base) {
+            let rows = base[h.old.clone()].iter().map(|t| Virt { text: t.clone(), fg: 0, bg: BG_DEL, mark: ('-', BAD) }).collect();
+            d.above.push((h.new.start, rows));
+        }
+        for l in h.new.clone() {
+            d.bg[l] = BG_ADD;
+            d.mark[l] = if fresh.contains(lines[l].as_str()) { ('▎', FRESH) } else { ('+', OK) };
+        }
+        d.changes.push(h.new.start.min(n.saturating_sub(1)));
+        if !h.new.is_empty() {
+            let label = format!("{} changed line{}, {} removed", h.new.len(), if h.new.len() == 1 { "" } else { "s" }, h.old.len());
+            d.folds.push(Fold { a: h.new.start, b: h.new.end - 1, open: !shut.contains(&h.old.start), label, hides_above: true });
+            keys.push(FoldKey { hunk: true, old: (h.old.start, h.old.end) });
+        }
+        (ne, oe) = (h.new.end, h.old.end);
+    }
+    if !hunks.is_empty() {
+        stretch(&mut d, &mut keys, (ne, n), oe, true, false);
+    }
+    if let Some((a, b)) = range {
+        for l in a.saturating_sub(1)..b.min(n) {
+            if d.bg[l] == 0 {
+                d.bg[l] = BG_RANGE;
+            }
+        }
+    }
+    for &l in links.iter().filter(|&&l| l < n) {
+        d.mark[l] = ('›', ACCENT);
+    }
+    let plain = hunks.is_empty() && range.is_none() && links.is_empty();
+    (if plain { None } else { Some(d) }, keys)
+}
+
 impl App {
     pub fn new(w: usize, h: usize, root: PathBuf, multi: bool, why: Option<PathBuf>, notes: Option<PathBuf>) -> App {
         let why = why.map(|p| Watched::new(p, &root));
@@ -203,21 +260,22 @@ impl App {
             files: vec![],
             fresh: vec![],
             loaded: false,
-            item: Item::File(0),
-            view: View::default(),
-            view_key: None,
+            item: None,
+            focus: Focus::List,
+            pane: None,
+            bases: HashMap::new(),
+            decor_key: None,
+            decor_name: String::new(),
+            fold_keys: vec![],
+            opened: HashMap::new(),
+            shut: HashMap::new(),
             ver: 0,
-            cursor: 0,
-            top: 0,
-            keep: true,
-            hscroll: 0,
             follow: true,
             side: true,
             side_st: sidebar::State::default(),
             geo: sidebar::Geo::default(),
             side_targets: vec![],
-            view_at: (0, 0, 0, 0),
-            pane_at: (0, 0, 0, 0),
+            edit_at: (0, 0, 0, 0),
             why,
             entry: vec![],
             show_entry: true,
@@ -225,8 +283,8 @@ impl App {
             notes_lines: vec![],
             refs: vec![],
             notes_new: false,
-            pane: None,
-            pane_focus: false,
+            prefix: None,
+            last_key: Instant::now() - Duration::from_secs(60),
             help: false,
             msg: String::new(),
             err: String::new(),
@@ -274,34 +332,40 @@ impl App {
             fresh.push(flags);
         }
         let name = match self.item {
-            Item::File(i) => self.files.get(i).map(|f| f.name.clone()),
+            Some(Item::File(i)) => self.files.get(i).map(|f| f.name.clone()),
             _ => None,
         };
         self.files = files;
         self.fresh = fresh;
         self.ver += 1;
-        match changed {
-            // follow, unless the user is reading the notes or editing
-            Some((i, at)) if self.follow && !self.pane_focus && matches!(self.item, Item::File(_)) => {
-                self.item = Item::File(i);
-                self.cursor = at;
-                // put the change a third of the way down
-                self.top = at.saturating_sub(self.view_at.3 / 3);
-                self.keep = true;
-            }
-            Some((i, _)) if !matches!(self.item, Item::File(_)) => self.msg = format!("{} changed", self.files[i].name),
-            _ => {
-                if let Some(i) = name.and_then(|n| self.files.iter().position(|f| f.name == n)) {
-                    self.item = Item::File(i);
-                }
-            }
-        }
-        if let Item::File(i) = self.item {
-            self.item = Item::File(i.min(self.files.len().saturating_sub(1)));
+        if let Some(n) = name {
+            self.item = self.files.iter().position(|f| f.name == n).map(Item::File);
         }
         // a reference to a file that only now exists
         self.find_refs();
         self.reload_clean_buffers();
+        match changed {
+            Some((i, at)) if self.follow && self.can_follow() => {
+                let line = self.files[i].rows.get(at).map(|r| if r.new > 0 { r.new } else { r.old.max(1) } as usize);
+                self.show(Item::File(i), line);
+            }
+            Some((i, _)) => self.msg = format!("{} changed", self.files[i].name),
+            None => {}
+        }
+        if self.pane.is_none() && !self.files.is_empty() {
+            self.show(Item::File(0), None);
+        }
+        self.sync_item();
+    }
+
+    /// Follow a change only when it won't pull the rug from under the user:
+    /// not mid-edit, not with unsaved changes, not just after a key.
+    fn can_follow(&self) -> bool {
+        let quiet = self.last_key.elapsed() > Duration::from_secs(3);
+        match &self.pane {
+            None => true,
+            Some(p) => quiet && p.ed.mode == Mode::Normal && p.ed.pending.is_empty() && !p.ed.bb().dirty,
+        }
     }
 
     /// Files the editor has open but not modified follow changes made on disk
@@ -332,6 +396,7 @@ impl App {
         }
         ed.clamp();
         ed.screen.invalidate();
+        self.decor_key = None;
         if !clash.is_empty() {
             self.msg = format!("{} changed on disk under your unsaved edits: :w overwrites, :e! takes theirs", clash.join(", "));
         }
@@ -344,12 +409,324 @@ impl App {
         }
         if let Some(s) = self.notes.as_mut().and_then(|w| w.changed()) {
             self.notes_lines = s.lines().map(String::from).collect();
-            self.notes_new = self.item != Item::Notes && self.ver > 0;
+            self.notes_new = self.item != Some(Item::Notes) && self.ver > 0;
             self.find_refs();
             self.ver += 1;
             self.reload_clean_buffers();
         }
     }
+
+    /// Re-read the references in the notes, keeping the selected one.
+    fn find_refs(&mut self) {
+        let key = |r: &Ref| (r.path.clone(), r.from, r.to);
+        let was = match self.item {
+            Some(Item::Ref(i)) => self.refs.get(i).map(key),
+            _ => None,
+        };
+        let root = &self.root;
+        self.refs = notes::refs(&self.notes_lines, &|p| root.join(p).is_file());
+        if let Some(k) = was {
+            self.item = Some(self.refs.iter().position(|r| key(r) == k).map_or(Item::Notes, Item::Ref));
+        }
+    }
+
+    /// The list's items, in order.
+    fn items(&self) -> Vec<Item> {
+        let mut v: Vec<Item> = (0..self.files.len()).map(Item::File).collect();
+        if self.notes.is_some() {
+            v.push(Item::Notes);
+            v.extend((0..self.refs.len()).map(Item::Ref));
+        }
+        v
+    }
+
+    fn step(&mut self, d: isize) {
+        let v = self.items();
+        if v.is_empty() {
+            return;
+        }
+        let i = self.item.and_then(|it| v.iter().position(|&x| x == it)).map_or(if d > 0 { -1 } else { v.len() as isize }, |i| i as isize);
+        self.show(v[(i.saturating_add(d)).clamp(0, v.len() as isize - 1) as usize], None);
+    }
+
+    /// The name in the tree of the file at `p`.
+    fn name_of(&self, p: &Path) -> String {
+        p.strip_prefix(&self.root).unwrap_or(p).to_string_lossy().into_owned()
+    }
+
+    fn is_notes(&self, p: &Path) -> bool {
+        self.notes.as_ref().is_some_and(|n| n.is(p, &self.name_of(p)))
+    }
+
+    /// Open `it` in the editor, at 1-based `line` (else where it starts).
+    fn show(&mut self, it: Item, line: Option<usize>) {
+        let (path, start) = match it {
+            Item::File(i) => {
+                let f = &self.files[i];
+                if f.status != 'D' && !f.rows.is_empty() && f.rows.iter().all(|r| r.kind == RK::Note) {
+                    self.msg = format!("{}: {}", f.name, f.rows[0].text);
+                    return;
+                }
+                let first = f.rows.iter().find(|r| matches!(r.kind, RK::Add | RK::Del)).map_or(1, |r| if r.new > 0 { r.new } else { r.old.max(1) } as usize);
+                (self.root.join(&f.name), first)
+            }
+            Item::Notes => {
+                let Some(n) = &self.notes else { return };
+                self.notes_new = false;
+                (n.path.clone(), 1)
+            }
+            Item::Ref(r) => {
+                let rf = &self.refs[r];
+                (self.root.join(&rf.path), rf.from.max(1))
+            }
+        };
+        let line = line.unwrap_or(start);
+        match &mut self.pane {
+            Some(p) => {
+                p.ed.open_file(&path);
+            }
+            None => {
+                let (w, h) = (self.edit_at.2.max(20), self.edit_at.3.max(5));
+                self.pane = Some(mvi::Pane::open(w, h, &path, 1));
+            }
+        }
+        self.item = Some(it);
+        self.decor_key = None;
+        // lay the diff out before placing the cursor, so it lands on a row that shows
+        self.decorate();
+        let th = self.edit_at.3.saturating_sub(2).max(1);
+        if let Some(p) = &mut self.pane {
+            let y = (line - 1).min(p.ed.bb().lines.len() - 1);
+            p.ed.set_cursor((y, 0));
+            let b = p.ed.b();
+            if let Some(d) = &mut b.decor {
+                if let Some(i) = d.closed(y) {
+                    d.folds[i].open = true;
+                }
+            }
+            // the change a third of the way down, its removed lines above it
+            b.top = y.saturating_sub(th / 3);
+        }
+    }
+
+    /// Keep the list on what the editor shows when the user switches files
+    /// in the editor itself (`:e`, `:b`, `gf`).
+    fn sync_item(&mut self) {
+        let Some(path) = self.pane.as_ref().and_then(|p| p.ed.bb().path.clone()) else { return };
+        let name = self.name_of(&path);
+        let shows = match self.item {
+            Some(Item::File(i)) => self.files.get(i).is_some_and(|f| f.name == name),
+            Some(Item::Notes) => self.is_notes(&path),
+            Some(Item::Ref(r)) => self.refs.get(r).is_some_and(|f| f.path == name),
+            None => false,
+        };
+        if !shows {
+            let notes = self.is_notes(&path);
+            self.item = self.files.iter().position(|f| f.name == name).map(Item::File).or(notes.then_some(Item::Notes));
+            self.decor_key = None;
+        }
+    }
+
+    /// The parent's text of changed file `i`, cached per fork point.
+    fn base_of(&mut self, i: usize) -> Vec<String> {
+        let f = &self.files[i];
+        let Some(head) = self.heads.get(f.repo) else { return vec![] };
+        let Ok(fork) = &head.fork else { return vec![] };
+        if let Some((k, v)) = self.bases.get(&f.name) {
+            if k == fork {
+                return v.clone();
+            }
+        }
+        let lines = if matches!(f.status, 'A' | '?') {
+            vec![]
+        } else {
+            let (root, path) = if head.dir.is_empty() { (self.root.clone(), f.name.clone()) } else { (self.root.join(&head.dir), f.name[head.dir.len() + 1..].to_string()) };
+            diff::file_at(&root, fork, &path)
+        };
+        self.bases.insert(f.name.clone(), (fork.clone(), lines.clone()));
+        lines
+    }
+
+    /// Lay the editor's current buffer out as an inline diff, when it or
+    /// the snapshot changed since the last time.
+    fn decorate(&mut self) {
+        let Some(p) = &self.pane else { return };
+        let b = p.ed.bb();
+        let Some(path) = b.path.clone() else { return };
+        let key = (path.clone(), b.version, self.ver);
+        if self.decor_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.decor_key = Some(key);
+        let name = self.name_of(&path);
+        // what the user opened and closed in the last layout of this file
+        if name == self.decor_name {
+            if let Some(d) = &b.decor {
+                if d.folds.len() == self.fold_keys.len() {
+                    for (f, k) in d.folds.iter().zip(&self.fold_keys) {
+                        if k.hunk {
+                            let s = self.shut.entry(name.clone()).or_default();
+                            if f.open {
+                                s.remove(&k.old.0);
+                            } else {
+                                s.insert(k.old.0);
+                            }
+                        } else if f.open {
+                            self.opened.entry(name.clone()).or_default().push(k.old);
+                        }
+                    }
+                }
+            }
+        }
+        let fi = self.files.iter().position(|f| f.name == name);
+        let base = fi.map(|i| self.base_of(i));
+        let Some(p) = &self.pane else { return };
+        let lines = &p.ed.bb().lines;
+        let fresh: HashSet<&str> = fi.map(|i| self.files[i].rows.iter().zip(&self.fresh[i]).filter(|&(r, &f)| f && r.kind == RK::Add).map(|(r, _)| r.text.as_str()).collect()).unwrap_or_default();
+        let range = match self.item {
+            Some(Item::Ref(r)) if self.refs[r].path == name && self.refs[r].from > 0 => Some((self.refs[r].from, self.refs[r].to.max(self.refs[r].from))),
+            _ => None,
+        };
+        let links: Vec<usize> = if self.is_notes(&path) { self.refs.iter().map(|r| r.at).collect() } else { vec![] };
+        let none = HashSet::new();
+        let (decor, keys) = layout(lines, base.as_deref(), &fresh, self.opened.get(&name).map_or(&[][..], |v| v), self.shut.get(&name).unwrap_or(&none), range, &links);
+        self.fold_keys = keys;
+        self.decor_name = name;
+        if let Some(p) = &mut self.pane {
+            p.ed.b().decor = decor;
+        }
+    }
+
+    /// The reference on the notes line under the editor's cursor.
+    fn ref_at_cursor(&self) -> Option<usize> {
+        let b = self.pane.as_ref()?.ed.bb();
+        if !self.is_notes(b.path.as_deref()?) {
+            return None;
+        }
+        self.refs.iter().position(|r| r.at == b.cy)
+    }
+
+    fn try_quit(&mut self) {
+        let dirty: Vec<String> = self.pane.as_ref().map(|p| p.ed.bufs.iter().filter(|b| b.dirty).map(|b| b.name.clone()).collect()).unwrap_or_default();
+        if dirty.is_empty() {
+            self.quit = true;
+        } else {
+            self.msg = format!("unsaved: {} (:w in the editor, or :qa! there to drop them)", dirty.join(", "));
+        }
+    }
+
+    // ---- keys ----
+
+    pub fn handle_key(&mut self, k: Key) {
+        self.last_key = Instant::now();
+        if self.help {
+            self.help = false;
+            return;
+        }
+        if let Key::Mouse(m) = k {
+            return self.mouse(m);
+        }
+        match self.focus {
+            Focus::List => self.list_key(k),
+            Focus::Editor => self.editor_key(k),
+        }
+    }
+
+    fn list_key(&mut self, k: Key) {
+        self.msg.clear();
+        match k {
+            Key::Char('q') | Key::Ctrl('c') => self.try_quit(),
+            Key::Ctrl('z') => self.suspend = true,
+            Key::Char('?') => self.help = true,
+            Key::Char('j') | Key::Down => self.step(1),
+            Key::Char('k') | Key::Up => self.step(-1),
+            Key::Char('g') | Key::Home => self.step(isize::MIN),
+            Key::Char('G') | Key::End => self.step(isize::MAX),
+            Key::Enter | Key::Tab | Key::Char('l') | Key::Right | Key::Ctrl('w') if self.pane.is_some() => self.focus = Focus::Editor,
+            Key::Char('f') => {
+                self.follow = !self.follow;
+                self.msg = if self.follow { "follow on: jumps to the next change" } else { "follow off" }.into();
+            }
+            Key::Char('x') => self.show_entry = !self.show_entry,
+            Key::Char('s') => {
+                self.side = !self.side;
+                if !self.side && self.pane.is_some() {
+                    self.focus = Focus::Editor;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn editor_key(&mut self, k: Key) {
+        let Some(p) = &self.pane else {
+            self.focus = Focus::List;
+            return;
+        };
+        let normal = p.ed.mode == Mode::Normal && p.ed.pending.is_empty();
+        let mut keys = vec![k.clone()];
+        if let Some(c) = self.prefix.take() {
+            if k == Key::Char('f') {
+                return self.step(if c == ']' { 1 } else { -1 });
+            }
+            keys.insert(0, Key::Char(c));
+        } else if normal {
+            match k {
+                Key::Ctrl('w') => {
+                    self.side = true;
+                    self.focus = Focus::List;
+                    return;
+                }
+                Key::Char(c @ (']' | '[')) => {
+                    self.prefix = Some(c);
+                    return;
+                }
+                Key::Enter => {
+                    if let Some(r) = self.ref_at_cursor() {
+                        return self.show(Item::Ref(r), None);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(p) = &mut self.pane {
+            for k in keys {
+                p.key(k);
+            }
+            if p.finished() {
+                self.quit = true;
+            }
+        }
+        self.sync_item();
+    }
+
+    fn mouse(&mut self, m: Mouse) {
+        let (x0, y0, w, h) = self.edit_at;
+        if self.pane.is_some() && m.x >= x0 && m.x < x0 + w && m.y >= y0 && m.y < y0 + h {
+            self.focus = Focus::Editor;
+            if let Some(p) = &mut self.pane {
+                p.key(Key::Mouse(Mouse { x: m.x - x0, y: m.y - y0, ..m }));
+            }
+            return self.sync_item();
+        }
+        if !self.geo.contains(m.x) {
+            return;
+        }
+        match m.kind {
+            MouseKind::WheelUp => self.side_st.scroll(-3),
+            MouseKind::WheelDown => self.side_st.scroll(3),
+            MouseKind::Press(0) => {
+                let t = self.geo.row_at(m.x, m.y).and_then(|r| self.side_targets.get(r).copied().flatten());
+                if let Some(it) = t.and_then(|t| self.items().get(t).copied()) {
+                    self.focus = Focus::List;
+                    self.show(it, None);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // ---- drawing ----
 
     /// What the changes are measured from: the parent branch, or each
     /// distinct one in a tree of checkouts; with one repo, also the fork point.
@@ -369,297 +746,6 @@ impl App {
             }
         }
     }
-
-    /// Re-read the references in the notes, keeping the selected one.
-    fn find_refs(&mut self) {
-        let key = |r: &Ref| (r.path.clone(), r.from, r.to);
-        let was = match self.item {
-            Item::Ref(i) => self.refs.get(i).map(key),
-            _ => None,
-        };
-        let root = &self.root;
-        self.refs = notes::refs(&self.notes_lines, &|p| root.join(p).is_file());
-        if let Some(k) = was {
-            self.item = self.refs.iter().position(|r| key(r) == k).map_or(Item::Notes, Item::Ref);
-        }
-    }
-
-    /// The sidebar's selectable items, in order.
-    fn items(&self) -> Vec<Item> {
-        let mut v: Vec<Item> = (0..self.files.len()).map(Item::File).collect();
-        if self.notes.is_some() {
-            v.push(Item::Notes);
-            v.extend((0..self.refs.len()).map(Item::Ref));
-        }
-        v
-    }
-
-    fn step(&mut self, d: isize) {
-        let v = self.items();
-        if v.is_empty() {
-            return;
-        }
-        let i = v.iter().position(|&x| x == self.item).map_or(if d > 0 { -1 } else { v.len() as isize }, |i| i as isize);
-        self.select(v[(i + d).clamp(0, v.len() as isize - 1) as usize]);
-    }
-
-    fn select(&mut self, it: Item) {
-        // picking a reference again goes back to its lines
-        if it == self.item && !matches!(it, Item::Ref(_)) {
-            return;
-        }
-        self.item = it;
-        self.hscroll = 0;
-        self.keep = true;
-        (self.cursor, self.top) = (0, 0);
-        match it {
-            Item::Ref(r) => {
-                let at = self.refs[r].from.saturating_sub(1);
-                self.cursor = at;
-                self.top = at.saturating_sub(self.view_at.3 / 3);
-            }
-            Item::Notes => self.notes_new = false,
-            Item::File(_) => {}
-        }
-    }
-
-    fn move_to(&mut self, i: usize) {
-        self.cursor = i.min(self.view.rows.len().saturating_sub(1));
-        self.keep = true;
-    }
-
-    /// n / N: the next hunk, notes line with a reference, or block of changed
-    /// lines, whichever the view has.
-    fn jump(&mut self, fwd: bool) {
-        let v = &self.view;
-        let stop = |k: usize| match v.kind {
-            Mark::Fresh => v.rows[k].kind == RK::Hunk,
-            Mark::Link => v.mark[k],
-            Mark::Range => v.rows[k].kind == RK::Add && (k == 0 || v.rows[k - 1].kind != RK::Add),
-        };
-        let to = if fwd { (self.cursor + 1..v.rows.len()).find(|&k| stop(k)) } else { (0..self.cursor).rev().find(|&k| stop(k)) };
-        match to {
-            Some(k) => {
-                self.cursor = k;
-                self.top = k.saturating_sub(if v.kind == Mark::Fresh { 0 } else { self.view_at.3 / 3 });
-            }
-            None => self.msg = format!("nothing {}", if fwd { "below" } else { "above" }),
-        }
-    }
-
-    // ---- editing ----
-
-    /// Enter (`go`) or e: edit at the cursor; Enter on a notes line with a
-    /// reference goes to it instead.
-    fn edit(&mut self, go: bool) {
-        self.ensure_view();
-        match self.item {
-            Item::File(i) => {
-                let Some(f) = self.files.get(i) else { return };
-                if f.status == 'D' {
-                    self.msg = "the file is deleted: nothing to edit".into();
-                    return;
-                }
-                let path = self.root.join(&f.name);
-                self.open(&path, diff::edit_line(&f.rows, self.cursor));
-            }
-            Item::Notes => {
-                if go {
-                    if let Some(r) = self.refs.iter().position(|r| r.at == self.cursor) {
-                        return self.select(Item::Ref(r));
-                    }
-                }
-                let Some(path) = self.notes.as_ref().map(|n| n.path.clone()) else { return };
-                self.open(&path, self.cursor + 1);
-            }
-            Item::Ref(r) => {
-                let path = self.root.join(&self.refs[r].path);
-                self.open(&path, diff::edit_line(&self.view.rows, self.cursor));
-            }
-        }
-    }
-
-    fn open(&mut self, path: &Path, line: usize) {
-        match &mut self.pane {
-            Some(p) => {
-                p.ed.open_file(path);
-                let y = (line - 1).min(p.ed.bb().lines.len() - 1);
-                p.ed.set_cursor((y, 0));
-            }
-            None => self.pane = Some(mvi::Pane::open(80, 20, path, line)),
-        }
-        self.pane_focus = true;
-    }
-
-    fn pane_key(&mut self, k: Key) {
-        let Some(p) = &mut self.pane else { return };
-        if k == Key::Ctrl('w') && p.ed.mode == mvi::editor::Mode::Normal {
-            self.pane_focus = false;
-            return;
-        }
-        let mut k = k;
-        if let Key::Mouse(m) = &mut k {
-            let (x, y, w, h) = self.pane_at;
-            if m.x < x || m.y < y || m.x >= x + w || m.y >= y + h {
-                self.pane_focus = false;
-                return self.mouse(*m);
-            }
-            m.x -= x;
-            m.y -= y;
-        }
-        p.key(k);
-        if p.finished() {
-            self.pane = None;
-            self.pane_focus = false;
-        }
-    }
-
-    // ---- keys ----
-
-    pub fn handle_key(&mut self, k: Key) {
-        self.msg.clear();
-        if self.pane_focus {
-            return self.pane_key(k);
-        }
-        if self.help {
-            self.help = false;
-            return;
-        }
-        self.ensure_view();
-        let n = self.view.rows.len();
-        let page = self.view_at.3.max(2);
-        match k {
-            Key::Char('q') | Key::Ctrl('c') => self.quit = true,
-            Key::Ctrl('z') => self.suspend = true,
-            Key::Char('?') => self.help = true,
-            Key::Char('j') | Key::Down => self.move_to(self.cursor + 1),
-            Key::Char('k') | Key::Up => self.move_to(self.cursor.saturating_sub(1)),
-            Key::Ctrl('d') | Key::PageDown => {
-                self.top = (self.top + page / 2).min(n.saturating_sub(1));
-                self.move_to(self.cursor + page / 2);
-            }
-            Key::Ctrl('u') | Key::PageUp => {
-                self.top = self.top.saturating_sub(page / 2);
-                self.move_to(self.cursor.saturating_sub(page / 2));
-            }
-            Key::Char('g') | Key::Home => self.move_to(0),
-            Key::Char('G') | Key::End => self.move_to(n),
-            Key::Char('J') | Key::Tab => self.step(1),
-            Key::Char('K') | Key::BackTab => self.step(-1),
-            Key::Char('n') => self.jump(true),
-            Key::Char('N') => self.jump(false),
-            Key::Left => self.hscroll = self.hscroll.saturating_sub(8),
-            Key::Right => self.hscroll += 8,
-            Key::Enter => self.edit(true),
-            Key::Char('e') => self.edit(false),
-            Key::Ctrl('w') if self.pane.is_some() => self.pane_focus = true,
-            Key::Char('f') => {
-                self.follow = !self.follow;
-                self.msg = if self.follow { "follow on: jumps to the next change" } else { "follow off" }.into();
-            }
-            Key::Char('x') => self.show_entry = !self.show_entry,
-            Key::Char('s') => self.side = !self.side,
-            Key::Mouse(m) => self.mouse(m),
-            _ => {}
-        }
-    }
-
-    fn mouse(&mut self, m: Mouse) {
-        let (_, py, _, ph) = self.pane_at;
-        if self.pane.is_some() && m.y >= py && m.y < py + ph && !self.geo.contains(m.x) {
-            self.pane_focus = true;
-            return self.pane_key(Key::Mouse(m));
-        }
-        let side = self.geo.contains(m.x);
-        match m.kind {
-            MouseKind::WheelUp if side => self.side_st.scroll(-3),
-            MouseKind::WheelDown if side => self.side_st.scroll(3),
-            MouseKind::WheelUp => {
-                self.top = self.top.saturating_sub(3);
-                self.keep = false;
-            }
-            MouseKind::WheelDown => {
-                self.top = (self.top + 3).min(self.view.rows.len().saturating_sub(1));
-                self.keep = false;
-            }
-            MouseKind::Press(0) if side => {
-                let t = self.geo.row_at(m.x, m.y).and_then(|r| self.side_targets.get(r).copied().flatten());
-                if let Some(it) = t.and_then(|t| self.items().get(t).copied()) {
-                    self.select(it);
-                }
-            }
-            MouseKind::Press(0) => {
-                let (_, y0, _, h) = self.view_at;
-                if m.y >= y0 && m.y < y0 + h {
-                    self.cursor = (self.top + m.y - y0).min(self.view.rows.len().saturating_sub(1));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // ---- views ----
-
-    fn ensure_view(&mut self) {
-        if self.view_key == Some((self.item, self.ver)) {
-            return;
-        }
-        self.view_key = Some((self.item, self.ver));
-        let line = |kind, n: usize, text: &str| Row { kind, old: 0, new: n as u32, text: text.to_string() };
-        let note = |text: &str| line(RK::Note, 0, text);
-        let (rows, mark, kind, name): (Vec<Row>, Vec<bool>, Mark, String) = match self.item {
-            Item::File(i) => match self.files.get(i) {
-                Some(f) => (f.rows.clone(), self.fresh[i].clone(), Mark::Fresh, f.name.clone()),
-                None => (vec![], vec![], Mark::Fresh, String::new()),
-            },
-            Item::Notes => {
-                let rows: Vec<Row> = if self.notes_lines.is_empty() {
-                    vec![note("no notes yet")]
-                } else {
-                    self.notes_lines.iter().enumerate().map(|(i, l)| line(RK::Ctx, i + 1, l)).collect()
-                };
-                let at: HashSet<usize> = self.refs.iter().map(|r| r.at).collect();
-                let mark = (0..rows.len()).map(|i| at.contains(&i)).collect();
-                (rows, mark, Mark::Link, self.notes.as_ref().map_or(String::new(), |n| n.path.display().to_string()))
-            }
-            Item::Ref(r) => {
-                let rf = &self.refs[r];
-                // lines this session added to the file show as added
-                let added: HashSet<u32> = self.files.iter().filter(|f| f.name == rf.path).flat_map(|f| f.rows.iter()).filter(|r| r.kind == RK::Add).map(|r| r.new).collect();
-                let mut rows = vec![];
-                match std::fs::read_to_string(self.root.join(&rf.path)) {
-                    Ok(s) => rows.extend(s.lines().enumerate().map(|(i, l)| line(if added.contains(&(i as u32 + 1)) { RK::Add } else { RK::Ctx }, i + 1, l))),
-                    Err(e) => rows.push(note(&format!("cannot read {}: {}", rf.path, e))),
-                }
-                let (a, b) = (rf.from, rf.to.max(rf.from));
-                let mark = rows.iter().map(|r: &Row| r.kind != RK::Note && a > 0 && (a..=b).contains(&(r.new as usize))).collect();
-                (rows, mark, Mark::Range, rf.path.clone())
-            }
-        };
-
-        let first = rows.iter().find(|r| matches!(r.kind, RK::Add | RK::Ctx)).map_or("", |r| r.text.as_str());
-        let lang = syntax::detect(Path::new(&name), first);
-        // in a diff the new and old sides keep separate state through a hunk
-        let (mut sn, mut so) = (State::Normal, State::Normal);
-        let mut hls = Vec::with_capacity(rows.len());
-        for r in &rows {
-            let mut hl = Vec::new();
-            match r.kind {
-                RK::Hunk => (sn, so) = (State::Normal, State::Normal),
-                RK::Add if kind == Mark::Fresh => sn = syntax::highlight(lang, &r.text, sn, &mut hl),
-                RK::Del => so = syntax::highlight(lang, &r.text, so, &mut hl),
-                RK::Add | RK::Ctx => {
-                    sn = syntax::highlight(lang, &r.text, sn, &mut hl);
-                    so = sn;
-                }
-                RK::Note => {}
-            }
-            hls.push(hl);
-        }
-        self.view = View { rows, mark, hl: hls, kind };
-    }
-
-    // ---- drawing ----
 
     fn side_rows(&mut self) -> (Vec<sidebar::Row>, Option<usize>) {
         let grouped = self.notes.is_some() || self.multi;
@@ -722,8 +808,8 @@ impl App {
                 }
             };
             r.depth = depth;
-            r.current = it == self.item;
-            if it == self.item {
+            r.current = Some(it) == self.item;
+            if Some(it) == self.item {
                 sel = Some(rows.len());
             }
             rows.push(r);
@@ -736,7 +822,7 @@ impl App {
     pub fn render(&mut self) {
         let (w, h) = (self.screen.w, self.screen.h);
         self.screen.clear();
-        if h < 4 || w < 20 {
+        if h < 6 || w < 30 {
             self.screen.flush(None);
             return;
         }
@@ -753,7 +839,7 @@ impl App {
         let right = format!("{}{} file{}  +{} -{}{}", repos, nf, if nf == 1 { "" } else { "s" }, a, d, if self.follow { "  follow" } else { "" });
         self.screen.puts(w.saturating_sub(right.chars().count() + 1), 0, &right, Style::new(TEXT, BAR, 0), w);
 
-        // layout: list | view, then the explanation, then the pane
+        // layout: list | editor, the explanation under the editor
         let (y0, body) = (1, h - 2);
         let (srows, sel) = self.side_rows();
         let sw = if self.side && w >= 70 {
@@ -766,49 +852,45 @@ impl App {
         let dw = w - x0;
         let entry: Vec<String> = if self.show_entry && !self.entry.is_empty() {
             let text = self.entry.join("\n");
-            wrap(&text, dw.saturating_sub(3)).into_iter().map(|(a, b)| text[a..b].to_string()).take(8).collect()
+            wrap(&text, dw.saturating_sub(3)).into_iter().map(|(a, b)| text[a..b].to_string()).take(6).collect()
         } else {
             vec![]
         };
         let eh = if entry.is_empty() { 0 } else { entry.len() + 1 };
-        let ph = if self.pane.is_some() { ((body - eh) * 55 / 100).max(4) } else { 0 };
-        let dh = body.saturating_sub(eh + ph).max(1);
-        // a referenced file gets the notes line it came from pinned above it
-        let label = match self.item {
-            Item::Ref(r) if !self.help && dh > 2 => Some(self.refs[r].label.clone()),
-            _ => None,
-        };
-        self.view_at = if label.is_some() { (x0, y0 + 1, dw, dh - 1) } else { (x0, y0, dw, dh) };
-        self.pane_at = (x0, y0 + dh + eh, dw, ph);
+        let ehh = body.saturating_sub(eh).max(4);
+        self.edit_at = (x0, y0, dw, ehh);
 
         if sw > 0 {
-            self.geo = sidebar::draw(&mut self.screen, &srows, sel, &mut self.side_st, (0, sw), (y0, body), !self.pane_focus);
+            self.geo = sidebar::draw(&mut self.screen, &srows, sel, &mut self.side_st, (0, sw), (y0, body), self.focus == Focus::List);
         } else {
             self.geo = sidebar::Geo::default();
         }
 
-        let idle = |s: &mut Screen, t: &str| s.puts(x0 + 2, y0 + 1, t, Style::new(DIM, 0, ITALIC), w);
+        let mut cursor = None;
         if self.help {
-            for (i, l) in HELP.iter().enumerate().take(dh) {
+            for (i, l) in HELP.iter().enumerate().take(ehh) {
                 self.screen.puts(x0 + 2, y0 + 1 + i, l, Style::fg(TEXT), w);
             }
-        } else if !self.loaded {
-            idle(&mut self.screen, "reading changes…");
-        } else if matches!(self.item, Item::File(_)) && self.files.is_empty() {
-            let more = if self.notes.is_some() { "; J shows the notes" } else { "" };
-            let t = format!("no changes since {}; waiting for some{}", self.since(), more);
-            idle(&mut self.screen, &t);
-        } else {
-            if let Some(l) = &label {
-                self.screen.fill(x0, w, y0, Style::new(TEXT, BG_NOTE, 0));
-                let x = self.screen.puts(x0 + 1, y0, "› ", Style::new(ACCENT, BG_NOTE, BOLD), w);
-                self.screen.puts(x, y0, l, Style::new(TEXT, BG_NOTE, ITALIC), w);
+        } else if self.pane.is_some() {
+            self.decorate();
+            let focus = self.focus == Focus::Editor;
+            if let Some(p) = &mut self.pane {
+                let c = p.draw(&mut self.screen, (x0, y0), (dw, ehh));
+                if focus {
+                    cursor = c;
+                }
             }
-            self.draw_view();
+        } else {
+            let t = if !self.loaded {
+                "reading changes…".to_string()
+            } else {
+                format!("no changes since {}; waiting for some{}", self.since(), if self.notes.is_some() { "; j shows the notes" } else { "" })
+            };
+            self.screen.puts(x0 + 2, y0 + 1, &t, Style::new(DIM, 0, ITALIC), w);
         }
 
         if eh > 0 {
-            let ey = y0 + dh;
+            let ey = y0 + ehh;
             for (i, l) in entry.iter().enumerate() {
                 let y = ey + 1 + i;
                 self.screen.fill(x0, w, y, Style::new(TEXT, BG_NOTE, 0));
@@ -821,128 +903,68 @@ impl App {
             self.screen.puts(x0 + 1, ey, &format!("why{}", age), Style::new(DIM, BG_NOTE, ITALIC), w);
         }
 
-        let mut cursor = None;
-        if let Some(p) = &mut self.pane {
-            let (px, py, pw, ph) = self.pane_at;
-            let c = p.draw(&mut self.screen, (px, py), (pw, ph));
-            if self.pane_focus {
-                cursor = c;
-            }
-        }
-
         // status line
         self.screen.fill(0, w, h - 1, bar);
-        let tail = if self.pane.is_some() { "Ctrl-W editor   ? keys   q quit" } else { "f follow   x why   ? keys   q quit" };
         let (text, fg) = if !self.err.is_empty() {
             (self.err.clone(), BAD)
         } else if !self.msg.is_empty() {
             (self.msg.clone(), WARN)
-        } else if !self.note.is_empty() && !self.pane_focus {
-            (format!("{}   ? keys   q quit", self.note), WARN)
-        } else if self.pane_focus {
-            ("editing   Ctrl-W back to the view   :w save   :q close the pane".to_string(), DIM)
+        } else if !self.note.is_empty() {
+            (format!("{}   ? keys", self.note), WARN)
+        } else if self.focus == Focus::Editor {
+            ("Ctrl-W list   ]c [c change   ]f [f file   za fold   zR zM all   :w save".to_string(), DIM)
         } else {
-            let keys = match self.item {
-                Item::File(_) => "Enter edit here   n N hunk   J K item",
-                Item::Notes => "Enter go to the code   e edit notes   n N reference   J K item",
-                Item::Ref(_) => "Enter edit here   n N changed lines   J K item",
-            };
-            (format!("{}   {}", keys, tail), DIM)
+            ("j k pick   Enter edit   f follow   x why   s hide list   ? keys   q quit".to_string(), DIM)
         };
         self.screen.puts(1, h - 1, &text, Style::new(fg, BAR, 0), w);
         self.screen.flush(cursor);
-    }
-
-    fn draw_view(&mut self) {
-        self.ensure_view();
-        let (x0, y0, w, h) = self.view_at;
-        let xr = x0 + w;
-        let v = &self.view;
-        let n = v.rows.len();
-        self.cursor = self.cursor.min(n.saturating_sub(1));
-        if self.keep {
-            let margin = 3.min(h / 4);
-            if self.cursor < self.top + margin {
-                self.top = self.cursor.saturating_sub(margin);
-            }
-            if self.cursor + margin >= self.top + h {
-                self.top = (self.cursor + margin + 1).saturating_sub(h);
-            }
-        }
-        self.top = self.top.min(n.saturating_sub(1));
-        let single = v.kind != Mark::Fresh;
-        let gw = v.rows.iter().map(|r| r.old.max(r.new)).max().unwrap_or(0).max(1).to_string().len().max(3);
-        let nums_w = if single { gw } else { 2 * gw + 1 };
-        let tc = nums_w + 3;
-        for (k, r) in v.rows.iter().enumerate().skip(self.top).take(h) {
-            let y = y0 + k - self.top;
-            let cur = k == self.cursor;
-            let marked = v.mark.get(k) == Some(&true);
-            match r.kind {
-                RK::Hunk | RK::Note => {
-                    let bg = if cur { BG_CUR } else { 0 };
-                    self.screen.fill(x0, xr, y, Style::new(0, bg, 0));
-                    let st = if r.kind == RK::Hunk { Style::new(HUNK, bg, 0) } else { Style::new(DIM, bg, ITALIC) };
-                    self.screen.puts(x0 + 1, y, &r.text, st, xr);
-                }
-                RK::Add | RK::Del | RK::Ctx => {
-                    let bg = match (r.kind, cur) {
-                        (_, false) if marked && v.kind == Mark::Range => BG_RANGE,
-                        (RK::Add, true) => BG_ADD_CUR,
-                        (RK::Add, false) => BG_ADD,
-                        (RK::Del, true) => BG_DEL_CUR,
-                        (RK::Del, false) => BG_DEL,
-                        (_, true) => BG_CUR,
-                        _ => 0,
-                    };
-                    self.screen.fill(x0, xr, y, Style::new(0, bg, 0));
-                    let num = |n: u32| if n > 0 { format!("{:>w$}", n, w = gw) } else { " ".repeat(gw) };
-                    let nums = if single { num(r.new) } else { format!("{} {}", num(r.old), num(r.new)) };
-                    self.screen.puts(x0, y, &nums, Style::new(if cur { TEXT } else { DIM }, bg, 0), xr);
-                    match v.kind {
-                        Mark::Fresh if marked => _ = self.screen.put(x0 + nums_w, y, '▎', Style::new(FRESH, bg, 0)),
-                        Mark::Link if marked => _ = self.screen.put(x0 + nums_w, y, '›', Style::new(ACCENT, bg, BOLD)),
-                        _ => {}
-                    }
-                    let (mark, col) = match r.kind {
-                        RK::Add => ('+', OK),
-                        RK::Del => ('-', BAD),
-                        _ => (' ', 0),
-                    };
-                    self.screen.put(x0 + nums_w + 1, y, mark, Style::new(col, bg, BOLD));
-                    let hl = v.hl.get(k);
-                    let (mut x, mut c) = (x0 + tc, 0usize);
-                    for (bi, ch) in r.text.char_indices() {
-                        let (ch, cw) = if ch == '\t' { (' ', 4) } else { (ch, mtui::screen::char_width(ch)) };
-                        if c >= self.hscroll {
-                            if x + cw > xr {
-                                break;
-                            }
-                            let st = syntax::style(hl.and_then(|v| v.get(bi)).copied().unwrap_or(0));
-                            for _ in 0..if ch == ' ' { cw } else { 1 } {
-                                x += self.screen.put(x, y, ch, Style::new(st.fg, bg, st.attr));
-                            }
-                        }
-                        c += cw;
-                    }
-                }
-            }
-        }
-        if n > h {
-            let s = format!("{}% ", (self.top + h).min(n) * 100 / n);
-            self.screen.puts(xr.saturating_sub(s.len() + 1), y0 + h - 1, &s, Style::fg(DIM), xr);
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::newest_entry;
+    use super::*;
 
     #[test]
     fn newest_first() {
         let log = "# Why\n<!-- note -->\n\n## b.rs:9 second\nwhy two\nmore\n\n## a.rs:3 first\nwhy one\n";
         assert_eq!(newest_entry(log), vec!["## b.rs:9 second", "why two", "more"]);
         assert!(newest_entry("# Why\n<!-- entries -->\n").is_empty());
+    }
+
+    fn lines(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("l{}", i)).collect()
+    }
+
+    #[test]
+    fn inline_diff_layout() {
+        let base = lines(30);
+        let mut new = base.clone();
+        new[10] = "changed".into();
+        new.remove(20);
+        let none = HashSet::new();
+        let (d, keys) = layout(&new, Some(&base), &HashSet::new(), &[], &none, None, &[]);
+        let d = d.unwrap();
+        // the old line 10 shows above the new one, line 20 above where it was
+        assert_eq!(d.above.iter().map(|(l, v)| (*l, v[0].text.as_str())).collect::<Vec<_>>(), vec![(10, "l10"), (20, "l20")]);
+        assert_eq!(d.bg[10], BG_ADD);
+        assert_eq!(d.changes, vec![10, 20]);
+        // unchanged: 0..=6 folded (3 kept above line 10), 14..=16 too short to fold, 23..=28 folded
+        let folds: Vec<(usize, usize, bool)> = d.folds.iter().map(|f| (f.a, f.b, f.hides_above)).collect();
+        assert_eq!(folds, vec![(0, 6, false), (10, 10, true), (23, 28, false)]);
+        assert!(d.folds.iter().filter(|f| !f.hides_above).all(|f| !f.open));
+        assert_eq!(keys.len(), 3);
+        // an opened stretch stays open when it's laid out again
+        let (d, _) = layout(&new, Some(&base), &HashSet::new(), &[keys[2].old], &none, None, &[]);
+        assert!(d.unwrap().folds[2].open);
+    }
+
+    #[test]
+    fn unchanged_file_has_no_decor() {
+        let base = lines(5);
+        let (d, _) = layout(&base, Some(&base), &HashSet::new(), &[], &HashSet::new(), None, &[]);
+        assert!(d.is_none());
+        let (d, _) = layout(&base, None, &HashSet::new(), &[], &HashSet::new(), Some((2, 3)), &[]);
+        assert_eq!(d.unwrap().bg, vec![0, BG_RANGE, BG_RANGE, 0, 0]);
     }
 }
