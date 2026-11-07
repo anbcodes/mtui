@@ -22,6 +22,8 @@ SPELL   markdown/text files: ]s [s next/prev problem · z= suggestions/fix · zg
 SUGGEST FILE.suggest beside the file holds proposed edits with reasons (see mvi README):
         ]x [x next/prev · ga accept · gx reject · K full comment · :suggest list
         :accept! / :reject! all
+FOLDS   in a buffer a host program decorates (mdiff's inline diff): za zo zc toggle/open/close
+        the fold at the cursor · zR zM all · Enter or a click opens one · ]c [c next/prev change
 LEADER  <space>f files  <space>b buffers  <space>s symbols  <space>d diagnostics
         <space>/ grep  <space>c run checker  <space>y yank to system clipboard (OSC52)
 INSERT  Tab/^N/^P cycle completions, Enter accepts, ^Space force, ^W ^U ^R{reg} ^T ^D

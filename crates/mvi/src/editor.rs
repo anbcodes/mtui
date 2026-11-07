@@ -4,6 +4,7 @@ use crate::buffer::{Buffer, Pos};
 use crate::complete::{self, Completion};
 use crate::diag::{CheckResult, Diag, Sev};
 use crate::picker::{PickItem, Picker};
+use crate::view::{self, Row};
 use mtui::picker::Pick;
 use mtui::regex::{is_word, Regex};
 use mtui::screen::{char_width, Screen};
@@ -1004,14 +1005,15 @@ impl Editor {
                 t((y, x), TK::Excl)
             }
             M::ScrTop | M::ScrMid | M::ScrBot => {
-                let top = b.top;
-                let th = self.text_h();
-                let bot = (top + th).min(nl) - 1;
+                let vis = view::lines_of(b, &view::rows(b, b.top, self.text_h()));
+                let last = vis.len().saturating_sub(1);
                 let y = match m {
-                    M::ScrTop => (top + n - 1).min(bot),
-                    M::ScrBot => bot.saturating_sub(n - 1).max(top),
-                    _ => (top + bot) / 2,
-                };
+                    M::ScrTop => vis.get((n - 1).min(last)),
+                    M::ScrBot => vis.get(last.saturating_sub(n - 1)),
+                    _ => vis.get(last / 2),
+                }
+                .copied()
+                .unwrap_or(cy.min(nl - 1));
                 t((y, fnb(&b.lines[y])), TK::Line)
             }
             M::SearchN(rev) => {
@@ -1513,6 +1515,9 @@ impl Editor {
     /// Scroll the view by `d` lines, moving the cursor only as far as needed
     /// to stay outside the scrolloff margin (so `scroll()` keeps the view).
     pub fn scroll_view(&mut self, d: isize) {
+        if self.bb().decor.is_some() {
+            return self.scroll_rows(d);
+        }
         let th = self.text_h();
         let so = 3.min(th.saturating_sub(1) / 2);
         let ts = self.opts.tabstop;
@@ -1529,13 +1534,150 @@ impl Editor {
         self.clamp();
     }
 
+    /// `scroll_view` for a decorated buffer, where a closed fold is one row.
+    fn scroll_rows(&mut self, d: isize) {
+        let th = self.text_h();
+        let ts = self.opts.tabstop;
+        let b = self.b();
+        let n = b.lines.len();
+        let Some(dec) = &b.decor else { return };
+        let mut top = dec.visible(b.top.min(n - 1));
+        for _ in 0..d.unsigned_abs() {
+            match if d > 0 { dec.next(top, n) } else { dec.prev(top) } {
+                Some(t) => top = t,
+                None => break,
+            }
+        }
+        let vis = view::lines_of(b, &dec.rows(n, top, th));
+        let cv = dec.visible(b.cy);
+        let cy = match (vis.first(), vis.last()) {
+            (Some(&f), _) if cv < f => Some(f),
+            (_, Some(&l)) if cv > l => Some(l),
+            _ => None,
+        };
+        b.top = top;
+        if let Some(cy) = cy {
+            b.cy = cy;
+            b.cx = byte_at_disp(&b.lines[cy], b.want_x, ts);
+        }
+        self.clamp();
+    }
+
+    /// Move the cursor `d` rows, a closed fold counting as one.
+    fn move_rows(&mut self, d: isize) {
+        let b = self.b();
+        let n = b.lines.len();
+        let Some(dec) = &b.decor else { return };
+        let mut l = dec.visible(b.cy);
+        for _ in 0..d.unsigned_abs() {
+            match if d > 0 { dec.next(l, n) } else { dec.prev(l) } {
+                Some(t) => l = t,
+                None => break,
+            }
+        }
+        let x = fnb(&b.lines[l]);
+        self.set_cursor((l, x));
+    }
+
+    /// The display row at screen row `y` of the text area.
+    fn row_at(&self, y: usize) -> Option<Row> {
+        let b = self.bb();
+        view::rows(b, b.top, y + 1).get(y).copied()
+    }
+
+    /// Open (`Some(true)`), close (`Some(false)`) or toggle (`None`) the fold
+    /// at the cursor (`at`: that line instead). False if there is none.
+    pub fn set_fold(&mut self, at: Option<usize>, open: Option<bool>) -> bool {
+        let b = self.b();
+        let l = at.unwrap_or(b.cy);
+        let Some(d) = &mut b.decor else { return false };
+        // Enter only acts on a closed one
+        let i = if open == Some(true) { d.closed(l) } else { d.fold_at(l) };
+        let Some(i) = i else { return false };
+        let f = &mut d.folds[i];
+        f.open = open.unwrap_or(!f.open);
+        if !f.open {
+            b.cy = f.a;
+        }
+        self.clamp();
+        true
+    }
+
+    fn set_all_folds(&mut self, open: bool) {
+        let b = self.b();
+        let Some(d) = &mut b.decor else { return };
+        for f in d.folds.iter_mut() {
+            f.open = open;
+        }
+        b.cy = d.visible(b.cy);
+        self.clamp();
+    }
+
+    /// `]c` / `[c`: the `n`th next or previous change.
+    fn jump_change(&mut self, fwd: bool, n: usize) {
+        let b = self.bb();
+        let Some(d) = &b.decor else { return };
+        let mut l = d.visible(b.cy);
+        let mut found = false;
+        for _ in 0..n {
+            let to = if fwd { d.changes.iter().find(|&&c| d.visible(c) > l) } else { d.changes.iter().rev().find(|&&c| d.visible(c) < l) };
+            match to {
+                Some(&c) => {
+                    l = d.visible(c);
+                    found = true;
+                }
+                None => break,
+            }
+        }
+        if !found {
+            return self.info(if fwd { "no later change" } else { "no earlier change" });
+        }
+        let from = self.cursor();
+        self.note_jump(from);
+        let x = fnb(&self.bb().lines[l]);
+        self.set_cursor((l, x));
+    }
+
+    /// After a key: keep the cursor off lines a closed fold hides. Moving
+    /// down onto one skips past the fold, moving up lands on its first line;
+    /// a jump into one, editing or selecting there, opens it.
+    fn fix_folds(&mut self, (buf, cy0, ver): (usize, usize, u64)) {
+        let mode = self.mode;
+        let same = buf == self.cur && ver == self.bb().version;
+        let b = self.b();
+        let n = b.lines.len();
+        let Some(d) = &mut b.decor else { return };
+        let Some(i) = d.closed(b.cy) else { return };
+        let f = &mut d.folds[i];
+        if !same || mode != Mode::Normal {
+            f.open = true;
+            return;
+        }
+        if b.cy == f.a {
+            return;
+        }
+        if cy0 == f.a && b.cy == f.a + 1 {
+            b.cy = if f.b + 1 < n { f.b + 1 } else { f.a };
+        } else if cy0 == f.b + 1 && b.cy == f.b {
+            b.cy = f.a;
+        } else {
+            f.open = true;
+            return;
+        }
+        self.clamp();
+    }
+
     /// The buffer position under a screen cell in the text area.
     fn mouse_pos(&self, x: usize, y: usize) -> Option<Pos> {
         if y >= self.text_h() {
             return None;
         }
         let b = self.bb();
-        let ln = (b.top + y).min(b.lines.len() - 1);
+        let ln = match self.row_at(y) {
+            Some(Row::Line(l)) | Some(Row::Virt(l, _)) => l.min(b.lines.len() - 1),
+            Some(Row::Fold(i)) => b.decor.as_ref().map_or(0, |d| d.folds[i].a),
+            None => b.lines.len() - 1,
+        };
         let disp = (x.saturating_sub(self.gutter_w()) + b.left) as usize;
         Some((ln, byte_at_disp(&b.lines[ln], disp, self.opts.tabstop)))
     }
@@ -1548,6 +1690,16 @@ impl Editor {
             MouseKind::WheelUp => self.scroll_view(-3),
             MouseKind::WheelDown => self.scroll_view(3),
             MouseKind::Press(0) => {
+                // a click on a closed fold opens it
+                if let Some(Row::Fold(i)) = self.row_at(m.y) {
+                    let b = self.b();
+                    if let Some(d) = &mut b.decor {
+                        d.folds[i].open = true;
+                        b.cy = d.folds[i].a;
+                    }
+                    self.clamp();
+                    return;
+                }
                 let Some(p) = self.mouse_pos(m.x, m.y) else { return };
                 self.pending.clear();
                 let n = match self.last_click {
@@ -1663,6 +1815,12 @@ impl Editor {
 
     // ---------- key dispatch ----------
     pub fn handle_key(&mut self, k: Key) {
+        let before = (self.cur, self.bb().cy, self.bb().version);
+        self.dispatch_key(k);
+        self.fix_folds(before);
+    }
+
+    fn dispatch_key(&mut self, k: Key) {
         if let Key::Mouse(m) = k {
             if !self.msg_lines.is_empty() {
                 if matches!(m.kind, MouseKind::Press(_)) {
@@ -1723,6 +1881,10 @@ impl Editor {
         if self.pending.is_empty() {
             if !matches!(k, Key::Char(':')) {
                 self.msg.clear();
+            }
+            // Enter on a closed fold opens it
+            if k == Key::Enter && self.set_fold(None, Some(true)) {
+                return;
             }
             match k {
                 Key::Esc => {
@@ -2072,6 +2234,11 @@ impl Editor {
                     _ => th.saturating_sub(2),
                 } as isize;
                 let d = if matches!(k, Key::Ctrl('u') | Key::Ctrl('b') | Key::PageUp) { -amt } else { amt } * n as isize;
+                if self.bb().decor.is_some() {
+                    self.move_rows(d);
+                    self.scroll_view(d);
+                    return P::Ok(());
+                }
                 let nl = self.bb().lines.len() as isize;
                 let b = self.b();
                 b.top = (b.top as isize + d).clamp(0, (nl - 1).max(0)) as usize;
@@ -2107,6 +2274,19 @@ impl Editor {
                     Some('=') => return P::Ok(self.spell_suggest()),
                     Some('g') => return P::Ok(self.spell_good(None, true)),
                     Some('G') => return P::Ok(self.spell_good(None, false)),
+                    Some(c @ ('a' | 'o' | 'c' | 'R' | 'M')) if self.bb().decor.is_some() => {
+                        match c {
+                            'a' => _ = self.set_fold(None, None),
+                            'o' => _ = self.set_fold(None, Some(true)),
+                            'c' => {
+                                if !self.set_fold(None, Some(false)) {
+                                    self.info("no fold here");
+                                }
+                            }
+                            _ => self.set_all_folds(c == 'R'),
+                        }
+                        return P::Ok(());
+                    }
                     _ => {}
                 }
                 let b = self.b();
@@ -2139,6 +2319,7 @@ impl Editor {
                     Some('q') => self.jump_qf(fwd),
                     Some('s') => self.jump_spell(fwd, n),
                     Some('x') => self.jump_suggest(fwd, n),
+                    Some('c') => self.jump_change(fwd, n),
                     Some('b') => {
                         let nb = self.bufs.len();
                         let i = if fwd { (self.cur + 1) % nb } else { (self.cur + nb - 1) % nb };
@@ -3182,5 +3363,141 @@ mod dot_tests {
         // `.` repeats it, overwriting again
         keys(&mut e, &[Key::Char('0'), Key::Char('l'), Key::Char('l'), Key::Char('.')]);
         assert_eq!(e.bb().lines[0], "ABABef");
+    }
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::*;
+    use crate::view::{Decor, Fold, Virt};
+
+    /// 20 lines with an unchanged run 5..=14 folded and a change at 16.
+    fn editor() -> Editor {
+        let mut e = Editor::new(80, 24);
+        e.b().lines = (0..20).map(|i| format!("line {}", i)).collect();
+        let gone = Virt { text: "old 16".into(), ..Virt::default() };
+        e.b().decor = Some(Decor {
+            above: vec![(16, vec![gone])],
+            folds: vec![Fold { a: 5, b: 14, open: false, label: "10 unchanged lines".into(), hides_above: false }],
+            changes: vec![2, 16],
+            ..Decor::default()
+        });
+        e
+    }
+
+    fn keys(e: &mut Editor, s: &str) {
+        for c in s.chars() {
+            e.handle_key(if c == '\n' { Key::Enter } else { Key::Char(c) });
+        }
+    }
+
+    #[test]
+    fn j_and_k_step_over_a_closed_fold() {
+        let mut e = editor();
+        keys(&mut e, "4j");
+        assert_eq!(e.cursor().0, 4);
+        keys(&mut e, "j");
+        assert_eq!(e.cursor().0, 5, "onto the fold's row");
+        keys(&mut e, "j");
+        assert_eq!(e.cursor().0, 15, "past it");
+        keys(&mut e, "k");
+        assert_eq!(e.cursor().0, 5, "back onto its row");
+    }
+
+    #[test]
+    fn fold_commands_open_and_close() {
+        let mut e = editor();
+        keys(&mut e, "5j");
+        assert_eq!(e.cursor().0, 5);
+        keys(&mut e, "\n");
+        assert!(e.bb().decor.as_ref().unwrap().folds[0].open, "Enter opens");
+        keys(&mut e, "3jzc");
+        assert!(!e.bb().decor.as_ref().unwrap().folds[0].open);
+        assert_eq!(e.cursor().0, 5, "closing puts the cursor on the fold");
+        keys(&mut e, "za");
+        assert!(e.bb().decor.as_ref().unwrap().folds[0].open);
+        keys(&mut e, "zM");
+        assert!(!e.bb().decor.as_ref().unwrap().folds[0].open);
+    }
+
+    #[test]
+    fn jumping_into_a_fold_opens_it() {
+        let mut e = editor();
+        keys(&mut e, "10G");
+        assert_eq!(e.cursor().0, 9);
+        assert!(e.bb().decor.as_ref().unwrap().folds[0].open);
+    }
+
+    #[test]
+    fn next_and_previous_change() {
+        let mut e = editor();
+        keys(&mut e, "]c");
+        assert_eq!(e.cursor().0, 2);
+        keys(&mut e, "]c");
+        assert_eq!(e.cursor().0, 16);
+        keys(&mut e, "[c");
+        assert_eq!(e.cursor().0, 2);
+    }
+
+    #[test]
+    fn a_click_maps_rows_to_lines() {
+        let mut e = editor();
+        let click = |e: &mut Editor, y| e.handle_key(Key::Mouse(Mouse { kind: MouseKind::Press(0), x: 10, y }));
+        // rows: 0-4 lines, 5 the fold, 6 = line 15, 7 = the deleted row, 8 = line 16
+        click(&mut e, 6);
+        assert_eq!(e.cursor().0, 15);
+        click(&mut e, 8);
+        assert_eq!(e.cursor().0, 16);
+        click(&mut e, 5);
+        assert!(e.bb().decor.as_ref().unwrap().folds[0].open, "a click on the fold opens it");
+    }
+}
+
+#[cfg(test)]
+mod modified_tests {
+    use super::*;
+
+    fn editor() -> Editor {
+        let mut e = Editor::new(80, 24);
+        e.b().lines = vec!["abc".into(), "def".into()];
+        e
+    }
+
+    fn keys(e: &mut Editor, s: &str) {
+        for c in s.chars() {
+            e.handle_key(Key::Char(c));
+        }
+    }
+
+    #[test]
+    fn undoing_back_to_the_saved_text_is_unmodified() {
+        let mut e = editor();
+        keys(&mut e, "x");
+        assert!(e.bb().dirty);
+        keys(&mut e, "u");
+        assert!(!e.bb().dirty, "back where it was loaded");
+        keys(&mut e, "xx");
+        keys(&mut e, "u");
+        assert!(e.bb().dirty);
+        keys(&mut e, "u");
+        assert!(!e.bb().dirty);
+        e.handle_key(Key::Ctrl('r'));
+        assert!(e.bb().dirty, "redo away from it");
+    }
+
+    #[test]
+    fn a_new_edit_after_undoing_past_the_save_stays_modified() {
+        let p = std::env::temp_dir().join(format!("mvi-saved-{}", std::process::id()));
+        std::fs::write(&p, "abc\ndef\n").unwrap();
+        let mut e = Editor::new(80, 24);
+        e.open_file(&p);
+        keys(&mut e, "x");
+        e.b().save().unwrap();
+        keys(&mut e, "u");
+        assert!(e.bb().dirty, "undone past the save");
+        keys(&mut e, "jx");
+        keys(&mut e, "u");
+        assert!(e.bb().dirty, "the saved text can't come back now");
+        std::fs::remove_file(&p).unwrap();
     }
 }

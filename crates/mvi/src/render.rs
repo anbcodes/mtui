@@ -4,6 +4,7 @@ use crate::diag::Sev;
 use crate::editor::{disp_col, Editor, Mode, TK};
 use mtui::screen::{char_width, Style, BOLD, ITALIC, UNDERCURL, UNDERLINE};
 use crate::syntax as sx;
+use crate::view::{self, Row};
 
 const FG_DIM: u8 = 246;
 const BG_CURLINE: u8 = 235;
@@ -20,6 +21,18 @@ const C_GRAMMAR: u8 = 75;
 const C_SUGGEST: u8 = 114;
 const BG_SUG_DEL: u8 = 52;
 const BG_SUG_ADD: u8 = 22;
+const BG_FOLD: u8 = 236;
+
+/// A decoration background, a shade lighter on the cursor's line.
+fn cur_tint(bg: u8) -> u8 {
+    match bg {
+        22 => 28,
+        52 => 88,
+        24 => 25,
+        0 => BG_CURLINE,
+        c => c,
+    }
+}
 
 fn kind_style(k: u8) -> Style {
     sx::style(k)
@@ -50,6 +63,17 @@ impl Editor {
         let ts = self.opts.tabstop;
         let b = self.b();
         let so = 3.min(th.saturating_sub(1) / 2);
+        if b.decor.is_some() {
+            Self::scroll_decor(b, th, so);
+            let dc = disp_col(&b.lines[b.cy], b.cx, ts);
+            if dc < b.left {
+                b.left = dc.saturating_sub(4);
+            }
+            if dc >= b.left + tw {
+                b.left = dc + 8 - tw.min(dc + 8);
+            }
+            return;
+        }
         if b.cy < b.top + so {
             b.top = b.cy.saturating_sub(so);
         }
@@ -65,6 +89,52 @@ impl Editor {
         if dc >= b.left + tw {
             b.left = dc + 8 - tw.min(dc + 8);
         }
+    }
+
+    /// `scroll` for a decorated buffer: rows, not lines, count, and a closed
+    /// fold is one row.
+    fn scroll_decor(b: &mut crate::buffer::Buffer, th: usize, so: usize) {
+        let Some(d) = &b.decor else { return };
+        let n = b.lines.len();
+        let cv = d.visible(b.cy);
+        let mut top = d.visible(b.top.min(n - 1));
+        // `so` rows of context above the cursor
+        let mut up = cv;
+        for _ in 0..so {
+            match d.prev(up) {
+                Some(p) => up = p,
+                None => break,
+            }
+        }
+        top = top.min(up);
+        // and below it, moving the top down until the cursor's row fits
+        for _ in 0..n {
+            let rows = d.rows(n, top, th + so + 1);
+            match view::row_of(b, &rows, cv) {
+                Some(p) if p + so.min(rows.len() - p - 1) < th => break,
+                Some(_) => {}
+                None if top > cv => top = cv,
+                None => {
+                    // far below: start about a screen above it
+                    let mut t = cv;
+                    for _ in 0..th.saturating_sub(so + 1) {
+                        match d.prev(t) {
+                            Some(p) => t = p,
+                            None => break,
+                        }
+                    }
+                    if t > top {
+                        top = t;
+                        continue;
+                    }
+                }
+            }
+            match d.next(top, n) {
+                Some(t) if t <= cv => top = t,
+                _ => break,
+            }
+        }
+        b.top = top;
     }
 
     /// Draw a frame to the terminal.
@@ -99,12 +169,20 @@ impl Editor {
         let b = &mut self.bufs[self.cur];
         let (top, left) = (b.top, b.left);
         let lang = b.lang;
+        let disp = view::rows(b, top, th);
         for row in 0..th {
-            let ln = top + row;
-            if ln >= b.lines.len() {
-                self.screen.put(0, row, '~', Style::fg(241));
-                continue;
-            }
+            let ln = match disp.get(row) {
+                Some(Row::Line(l)) => *l,
+                Some(&r) => {
+                    let on_cursor = matches!(r, Row::Fold(i) if b.decor.as_ref().is_some_and(|d| d.folds[i].a == d.visible(cy)));
+                    draw_extra(&mut self.screen, b, r, row, gw, left, on_cursor);
+                    continue;
+                }
+                None => {
+                    self.screen.put(0, row, '~', Style::fg(241));
+                    continue;
+                }
+            };
             // gutter
             let worst = b.diags.iter().filter(|d| d.line == ln).map(|d| d.sev).min();
             if let Some(s) = worst {
@@ -112,6 +190,11 @@ impl Editor {
             }
             else if b.sugs.iter().any(|s| s.line <= ln && s.end().0 >= ln) {
                 self.screen.put(0, row, '±', Style::new(C_SUGGEST, 0, BOLD));
+            }
+            else if let Some(&(c, col)) = b.decor.as_ref().and_then(|d| d.mark.get(ln)) {
+                if c != ' ' {
+                    self.screen.put(0, row, c, Style::new(col, 0, BOLD));
+                }
             }
             if self.opts.number || self.opts.relnum {
                 let n = if self.opts.relnum && ln != cy { (ln as isize - cy as isize).unsigned_abs() } else { ln + 1 };
@@ -144,7 +227,8 @@ impl Editor {
                 }
             }
             let cur_line = ln == cy && mode != Mode::VisualLine;
-            let base_bg = if cur_line { BG_CURLINE } else { 0 };
+            let dbg = b.decor.as_ref().and_then(|d| d.bg.get(ln)).copied().unwrap_or(0);
+            let base_bg = if cur_line { cur_tint(dbg) } else { dbg };
             let mut dc = 0usize;
             let max_x = w;
             for (i, c) in line.char_indices() {
@@ -238,8 +322,8 @@ impl Editor {
             if dc < left {
                 eol_x = gw;
             }
-            if cur_line {
-                self.screen.fill(eol_x, max_x, row, Style::new(0, BG_CURLINE, 0));
+            if base_bg != 0 {
+                self.screen.fill(eol_x, max_x, row, Style::new(0, base_bg, 0));
             }
             if let Some(t) = &vis {
                 // show selected newline
@@ -387,8 +471,9 @@ impl Editor {
         // cursor position in text
         let b = self.bb();
         let cdc = disp_col(&b.lines[cy], cx, ts);
-        let scr_x = gw + cdc.saturating_sub(b.left);
-        let scr_y = cy.saturating_sub(b.top);
+        let on_fold = b.decor.as_ref().is_some_and(|d| d.closed(cy).is_some());
+        let scr_x = if on_fold { gw } else { gw + cdc.saturating_sub(b.left) };
+        let scr_y = view::row_of(b, &disp, cy).unwrap_or(0);
         if cursor.is_none() {
             cursor = Some((scr_x.min(w - 1), scr_y, mode == Mode::Insert && !self.ovr));
         }
@@ -455,5 +540,51 @@ impl Editor {
         }
 
         cursor
+    }
+}
+
+/// A decoration row: a row drawn above a line, or a closed fold's summary.
+fn draw_extra(scr: &mut mtui::screen::Screen, b: &crate::buffer::Buffer, r: Row, row: usize, gw: usize, left: usize, on_cursor: bool) {
+    let Some(d) = &b.decor else { return };
+    let w = scr.w;
+    match r {
+        Row::Virt(l, k) => {
+            let v = &d.above(l)[k];
+            scr.fill(0, w, row, Style::new(0, v.bg, 0));
+            if v.mark.0 != ' ' {
+                scr.put(0, row, v.mark.0, Style::new(v.mark.1, v.bg, BOLD));
+            }
+            let mut hl = Vec::new();
+            if v.fg == 0 && v.text.len() < 2000 {
+                sx::highlight(b.lang, &v.text, sx::State::Normal, &mut hl);
+            }
+            let mut dc = 0usize;
+            for (i, c) in v.text.char_indices() {
+                let cw = if c == '\t' { 4 - dc % 4 } else { char_width(c) };
+                if dc + cw > left + (w - gw) {
+                    break;
+                }
+                if dc >= left {
+                    let mut st = if v.fg != 0 { Style::fg(v.fg) } else { kind_style(hl.get(i).copied().unwrap_or(0)) };
+                    st.bg = v.bg;
+                    if c == '\t' {
+                        for x in 0..cw {
+                            scr.put(gw + dc - left + x, row, ' ', st);
+                        }
+                    } else {
+                        scr.put(gw + dc - left, row, c, st);
+                    }
+                }
+                dc += cw;
+            }
+        }
+        Row::Fold(i) => {
+            let f = &d.folds[i];
+            let bg = if on_cursor { BG_SEL } else { BG_FOLD };
+            scr.fill(0, w, row, Style::new(0, bg, 0));
+            scr.put(0, row, '▸', Style::new(FG_DIM, bg, BOLD));
+            scr.puts(gw, row, &format!("⋯ {}", f.label), Style::new(FG_DIM, bg, ITALIC), w);
+        }
+        Row::Line(_) => {}
     }
 }

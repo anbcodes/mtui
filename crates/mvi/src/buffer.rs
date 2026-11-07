@@ -26,6 +26,9 @@ pub struct Buffer {
     pub path: Option<PathBuf>,
     pub name: String,
     pub dirty: bool,
+    /// The undo depth the file on disk matches, so undoing back to it is
+    /// unmodified again; None once that state can't be reached.
+    saved: Option<usize>,
     pub crlf: bool,
     pub lang: &'static Lang,
     pub hl: Highlighter,
@@ -38,6 +41,8 @@ pub struct Buffer {
     /// Suggestions from `FILE.suggest`, and its mtime when last read or written.
     pub sugs: Vec<crate::suggest::Suggestion>,
     pub sug_stamp: Option<std::time::SystemTime>,
+    /// What a host program draws around the text (a diff), if anything.
+    pub decor: Option<crate::view::Decor>,
     pub expand_tab: bool,
     pub indent_w: usize,
     // view state
@@ -67,6 +72,7 @@ impl Buffer {
             name: path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "[scratch]".into()),
             path,
             dirty: false,
+            saved: Some(0),
             crlf: false,
             lang: crate::syntax::plain(),
             hl: Highlighter::default(),
@@ -76,6 +82,7 @@ impl Buffer {
             spell_on: None,
             sugs: Vec::new(),
             sug_stamp: None,
+            decor: None,
             expand_tab: true,
             indent_w: 4,
             cy: 0,
@@ -164,6 +171,7 @@ impl Buffer {
             }
         }
         self.dirty = false;
+        self.saved = Some(self.undo.len() + usize::from(!self.cur.edits.is_empty()));
         self.reload_suggest_if_changed();
         self.save_suggest();
         Ok(data.len())
@@ -221,7 +229,7 @@ impl Buffer {
         if text.is_empty() {
             return p;
         }
-        self.redo.clear();
+        self.forget_redo();
         self.shift_diags(p, text.matches('\n').count() as isize);
         self.cur.edits.push(Edit::Ins(p, text.to_string()));
         self.raw_insert(p, text)
@@ -230,7 +238,7 @@ impl Buffer {
     /// Drop suggestion `i` (accepted or rejected), as an undoable step.
     pub fn remove_sug(&mut self, i: usize) -> crate::suggest::Suggestion {
         let s = self.sugs.remove(i);
-        self.redo.clear();
+        self.forget_redo();
         self.cur.edits.push(Edit::Sug(i, s.clone()));
         s
     }
@@ -242,7 +250,7 @@ impl Buffer {
         if a >= b {
             return String::new();
         }
-        self.redo.clear();
+        self.forget_redo();
         self.shift_diags(a, -((b.0 - a.0) as isize));
         let s = self.raw_delete(a, b);
         self.cur.edits.push(Edit::Del(a, s.clone()));
@@ -284,6 +292,7 @@ impl Buffer {
             self.undo.push(g);
             if self.undo.len() > 1000 {
                 self.undo.remove(0);
+                self.saved = self.saved.and_then(|s| s.checked_sub(1));
             }
         }
         self.cur.cursor = (usize::MAX, 0);
@@ -315,7 +324,17 @@ impl Buffer {
             self.save_suggest();
         }
         self.redo.push(g);
+        self.dirty = self.saved != Some(self.undo.len());
         Some(c)
+    }
+
+    /// A new edit after undoing: what was undone can't be redone, and if the
+    /// saved state was among it, nothing matches the file on disk any more.
+    fn forget_redo(&mut self) {
+        if !self.redo.is_empty() && self.saved.is_some_and(|s| s > self.undo.len()) {
+            self.saved = None;
+        }
+        self.redo.clear();
     }
 
     pub fn redo(&mut self) -> Option<Pos> {
@@ -344,6 +363,7 @@ impl Buffer {
             self.save_suggest();
         }
         self.undo.push(g);
+        self.dirty = self.saved != Some(self.undo.len());
         Some(last)
     }
 

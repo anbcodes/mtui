@@ -13,6 +13,7 @@ pub mod preview;
 pub mod render;
 pub mod spell;
 pub mod suggest;
+pub mod view;
 
 pub use editor::Editor;
 use mtui::syntax;
