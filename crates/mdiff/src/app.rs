@@ -5,7 +5,7 @@
 // entry of an explanation log, and an mvi pane to edit at the cursor while
 // everything above keeps updating.
 
-use crate::diff::{self, File, Row, RK};
+use crate::diff::{self, File, Head, Row, RK};
 use crate::notes::{self, Ref};
 use mtui::screen::{Screen, Style, BOLD, ITALIC};
 use mtui::sidebar;
@@ -115,9 +115,9 @@ pub struct App {
     pub quit: bool,
     pub suspend: bool,
     root: PathBuf,
-    base: String,
-    /// Where HEAD forked from `base`, short.
-    fork: String,
+    /// Several checkouts under `root`: the list groups files by repo.
+    multi: bool,
+    heads: Vec<Head>,
     files: Vec<File>,
     /// Per file, per row: added by the change that last touched the file.
     fresh: Vec<Vec<bool>>,
@@ -154,6 +154,8 @@ pub struct App {
     help: bool,
     msg: String,
     err: String,
+    /// A standing warning (no inotify), shown when nothing else is.
+    note: String,
 }
 
 fn mtime(p: &Path) -> Option<SystemTime> {
@@ -188,7 +190,7 @@ fn first_change(old: &File, new: &File) -> usize {
 }
 
 impl App {
-    pub fn new(w: usize, h: usize, root: PathBuf, base: String, why: Option<PathBuf>, notes: Option<PathBuf>) -> App {
+    pub fn new(w: usize, h: usize, root: PathBuf, multi: bool, why: Option<PathBuf>, notes: Option<PathBuf>) -> App {
         let why = why.map(|p| Watched::new(p, &root));
         let notes = notes.map(|p| Watched::new(p, &root));
         App {
@@ -196,8 +198,8 @@ impl App {
             quit: false,
             suspend: false,
             root,
-            base,
-            fork: String::new(),
+            multi,
+            heads: vec![],
             files: vec![],
             fresh: vec![],
             loaded: false,
@@ -228,22 +230,22 @@ impl App {
             help: false,
             msg: String::new(),
             err: String::new(),
+            note: String::new(),
         }
     }
 
+    pub fn notice(&mut self, s: String) {
+        self.note = s;
+    }
+
     /// A new snapshot from the watcher.
-    pub fn on_snapshot(&mut self, r: Result<(String, Vec<File>), String>) {
-        let mut files = match r {
-            Ok((fork, f)) => {
-                self.fork = fork.chars().take(8).collect();
-                f
-            }
-            Err(e) => {
-                self.err = e;
-                return;
-            }
-        };
-        self.err.clear();
+    pub fn on_snapshot(&mut self, heads: Vec<Head>, mut files: Vec<File>) {
+        self.err = heads
+            .iter()
+            .filter_map(|h| h.fork.as_ref().err().map(|e| if h.dir.is_empty() { format!("{}: {}", h.parent, e) } else { format!("{}: {}", h.dir, e) }))
+            .collect::<Vec<_>>()
+            .join("; ");
+        self.heads = heads;
         for w in [&self.why, &self.notes].into_iter().flatten() {
             if let Some(n) = &w.rel {
                 files.retain(|f| &f.name != n);
@@ -346,6 +348,25 @@ impl App {
             self.find_refs();
             self.ver += 1;
             self.reload_clean_buffers();
+        }
+    }
+
+    /// What the changes are measured from: the parent branch, or each
+    /// distinct one in a tree of checkouts; with one repo, also the fork point.
+    fn since(&self) -> String {
+        let short = |s: &str| if s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()) { s[..8].to_string() } else { s.to_string() };
+        match self.heads.as_slice() {
+            [] => "…".into(),
+            [h] => match &h.fork {
+                Ok(f) if !h.parent.starts_with(&f[..8.min(f.len())]) => format!("{} @ {}", short(&h.parent), &f[..8.min(f.len())]),
+                _ => short(&h.parent),
+            },
+            hs => {
+                let mut v: Vec<String> = hs.iter().map(|h| short(&h.parent)).collect();
+                v.sort();
+                v.dedup();
+                v.join(", ")
+            }
         }
     }
 
@@ -641,30 +662,40 @@ impl App {
     // ---- drawing ----
 
     fn side_rows(&mut self) -> (Vec<sidebar::Row>, Option<usize>) {
-        let grouped = self.notes.is_some();
+        let grouped = self.notes.is_some() || self.multi;
         let head = |t: &str| sidebar::Row { text: t.into(), dir: true, open: true, ..sidebar::Row::default() };
         let mut rows = vec![];
         let mut targets = vec![];
         let mut sel = None;
-        if grouped {
+        if grouped && !self.multi {
             rows.push(head("changes"));
             targets.push(None);
-            if self.files.is_empty() {
-                rows.push(sidebar::Row { text: "none yet".into(), depth: 1, dim: true, ..sidebar::Row::default() });
-                targets.push(None);
-            }
+        }
+        if grouped && self.files.is_empty() {
+            rows.push(sidebar::Row { text: "no changes yet".into(), depth: 1, dim: true, ..sidebar::Row::default() });
+            targets.push(None);
         }
         let depth = usize::from(grouped);
+        let mut repo = usize::MAX;
         for (t, it) in self.items().into_iter().enumerate() {
             let mut r = match it {
                 Item::File(i) => {
                     let f = &self.files[i];
+                    // in a tree of checkouts, a header for each repo with changes
+                    if self.multi && f.repo != repo {
+                        repo = f.repo;
+                        let mut r = head(&self.heads.get(repo).map_or(String::new(), |h| h.dir.clone()));
+                        r.extra = self.heads.get(repo).map_or(String::new(), |h| if h.branch.is_empty() { "detached".into() } else { h.branch.clone() });
+                        rows.push(r);
+                        targets.push(None);
+                    }
                     let col = match f.status {
                         'A' | '?' => OK,
                         'D' => BAD,
                         _ => WARN,
                     };
-                    let mut r = sidebar::Row::new(f.name.clone());
+                    let prefix = self.heads.get(f.repo).map_or(0, |h| if h.dir.is_empty() { 0 } else { h.dir.len() + 1 });
+                    let mut r = sidebar::Row::new(if self.multi { &f.name[prefix.min(f.name.len())..] } else { f.name.as_str() });
                     r.mark = Some((f.status, col));
                     r.extra = format!("+{} -{}", f.add, f.del);
                     r.bold = self.fresh.get(i).is_some_and(|v| v.iter().any(|&b| b));
@@ -715,11 +746,11 @@ impl App {
         self.screen.fill(0, w, 0, bar);
         let name = self.root.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
         let x = self.screen.puts(1, 0, &format!("mdiff {}", name), Style::new(ACCENT, BAR, BOLD), w);
-        let since = if self.fork.is_empty() || self.base.starts_with(&self.fork) { self.base.clone() } else { format!("{} @ {}", self.base, self.fork) };
-        self.screen.puts(x + 1, 0, &format!("since {}", since), Style::new(DIM, BAR, 0), w);
+        self.screen.puts(x + 1, 0, &format!("since {}", self.since()), Style::new(DIM, BAR, 0), w);
         let (a, d) = self.files.iter().fold((0, 0), |(a, d), f| (a + f.add, d + f.del));
         let nf = self.files.len();
-        let right = format!("{} file{}  +{} -{}{}", nf, if nf == 1 { "" } else { "s" }, a, d, if self.follow { "  follow" } else { "" });
+        let repos = if self.multi { format!("{} repos  ", self.heads.len()) } else { String::new() };
+        let right = format!("{}{} file{}  +{} -{}{}", repos, nf, if nf == 1 { "" } else { "s" }, a, d, if self.follow { "  follow" } else { "" });
         self.screen.puts(w.saturating_sub(right.chars().count() + 1), 0, &right, Style::new(TEXT, BAR, 0), w);
 
         // layout: list | view, then the explanation, then the pane
@@ -765,7 +796,8 @@ impl App {
             idle(&mut self.screen, "reading changes…");
         } else if matches!(self.item, Item::File(_)) && self.files.is_empty() {
             let more = if self.notes.is_some() { "; J shows the notes" } else { "" };
-            idle(&mut self.screen, &format!("no changes since {}; waiting for some{}", self.base, more));
+            let t = format!("no changes since {}; waiting for some{}", self.since(), more);
+            idle(&mut self.screen, &t);
         } else {
             if let Some(l) = &label {
                 self.screen.fill(x0, w, y0, Style::new(TEXT, BG_NOTE, 0));
@@ -805,6 +837,8 @@ impl App {
             (self.err.clone(), BAD)
         } else if !self.msg.is_empty() {
             (self.msg.clone(), WARN)
+        } else if !self.note.is_empty() && !self.pane_focus {
+            (format!("{}   ? keys   q quit", self.note), WARN)
         } else if self.pane_focus {
             ("editing   Ctrl-W back to the view   :w save   :q close the pane".to_string(), DIM)
         } else {

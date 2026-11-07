@@ -1,7 +1,9 @@
 // Reading changes from git: the working tree, untracked files included,
-// against a base commit, split into files of diff rows.
+// against a base commit, split into files of diff rows; for one checkout or
+// for a tree of several (a multi-repo project, or a ticket directory where
+// some entries are worktrees and the rest symlinks).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -29,7 +31,10 @@ fn row(kind: RK, old: u32, new: u32, text: impl Into<String>) -> Row {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct File {
+    /// Path from the watched tree's top, so it includes the repo's directory.
     pub name: String,
+    /// Index of its repo.
+    pub repo: usize,
     /// M modified, A added, D deleted, ? untracked
     pub status: char,
     pub add: usize,
@@ -107,6 +112,89 @@ pub fn fork_point(root: &Path, parent: &str) -> Result<String, String> {
     Ok(s.trim().to_string())
 }
 
+/// A checkout being watched: its directory under the watched tree ("" when
+/// the tree is the checkout) and the branch its changes are measured from.
+#[derive(Clone)]
+pub struct Repo {
+    pub dir: String,
+    pub root: PathBuf,
+    pub parent: String,
+}
+
+/// Where a repo stands in a snapshot.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Head {
+    pub dir: String,
+    /// The checked-out branch ("" when detached).
+    pub branch: String,
+    pub parent: String,
+    /// The fork point from `parent`, or why there isn't one.
+    pub fork: Result<String, String>,
+}
+
+/// The checkouts in `top` and one level below it (`System`, `Modules/Core`).
+/// Symlinks aren't followed: in a ticket tree they point at checkouts the
+/// ticket doesn't change.
+pub fn find_repos(top: &Path) -> Vec<String> {
+    let dirs = |p: &Path| -> Vec<(String, PathBuf)> {
+        let mut v: Vec<(String, PathBuf)> = std::fs::read_dir(p)
+            .map(|rd| rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| (e.file_name().to_string_lossy().into_owned(), e.path())).filter(|(n, _)| !n.starts_with('.')).collect())
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let mut out = vec![];
+    for (n, p) in dirs(top) {
+        if p.join(".git").exists() {
+            out.push(n);
+        } else {
+            out.extend(dirs(&p).into_iter().filter(|(_, q)| q.join(".git").exists()).map(|(m, _)| format!("{}/{}", n, m)));
+        }
+    }
+    out
+}
+
+/// Repo `i`'s changes since its fork point, files named from the tree's top.
+pub fn snapshot_repo(i: usize, r: &Repo) -> (Head, Vec<File>) {
+    let branch = git(&r.root, &["symbolic-ref", "--short", "-q", "HEAD"]).map(|s| s.trim().to_string()).unwrap_or_default();
+    let mut fork = fork_point(&r.root, &r.parent);
+    let mut files = Vec::new();
+    if let Ok(f) = &fork {
+        match snapshot(&r.root, f) {
+            Ok(v) => {
+                files = v
+                    .into_iter()
+                    .map(|mut x| {
+                        if !r.dir.is_empty() {
+                            x.name = format!("{}/{}", r.dir, x.name);
+                        }
+                        x.repo = i;
+                        x
+                    })
+                    .collect()
+            }
+            Err(e) => fork = Err(e),
+        }
+    }
+    (Head { dir: r.dir.clone(), branch, parent: r.parent.clone(), fork }, files)
+}
+
+/// Every repo's changes, in repo order.
+pub fn snapshot_all(repos: &[Repo]) -> (Vec<Head>, Vec<File>) {
+    let (mut heads, mut files) = (Vec::with_capacity(repos.len()), Vec::new());
+    for (i, r) in repos.iter().enumerate() {
+        let (h, f) = snapshot_repo(i, r);
+        heads.push(h);
+        files.extend(f);
+    }
+    (heads, files)
+}
+
+/// A checkout's git directory (for a worktree, its own one under the main repo's).
+pub fn git_dir(root: &Path) -> Option<PathBuf> {
+    git(root, &["rev-parse", "--absolute-git-dir"]).ok().map(|s| PathBuf::from(s.trim()))
+}
+
 /// Every change in the tree at `root` since commit `base`, sorted by path.
 pub fn snapshot(root: &Path, base: &str) -> Result<Vec<File>, String> {
     let patch = git(root, &["diff", "--no-color", "--no-ext-diff", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", base, "--"])?;
@@ -120,7 +208,7 @@ pub fn snapshot(root: &Path, base: &str) -> Result<Vec<File>, String> {
 }
 
 fn untracked(root: &Path, name: &str) -> File {
-    let mut f = File { name: name.to_string(), status: '?', add: 0, del: 0, rows: vec![] };
+    let mut f = File { name: name.to_string(), repo: 0, status: '?', add: 0, del: 0, rows: vec![] };
     let p = root.join(name);
     let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
     if size > MAX_UNTRACKED {
@@ -157,7 +245,7 @@ pub fn parse(p: &str) -> Vec<File> {
     for l in p.lines() {
         if let Some(rest) = l.strip_prefix("diff --git ") {
             let name = rest.rsplit_once(" b/").map_or(rest, |x| x.1);
-            files.push(File { name: name.to_string(), status: 'M', add: 0, del: 0, rows: vec![] });
+            files.push(File { name: name.to_string(), repo: 0, status: 'M', add: 0, del: 0, rows: vec![] });
             in_hunk = false;
             continue;
         }
@@ -246,6 +334,19 @@ deleted file mode 100644
         let got: Vec<(RK, u32, u32)> = r.iter().map(|r| (r.kind, r.old, r.new)).collect();
         use RK::*;
         assert_eq!(got, vec![(Hunk, 1, 1), (Ctx, 1, 1), (Del, 2, 0), (Add, 0, 2), (Add, 0, 3), (Ctx, 3, 4)]);
+    }
+
+    #[test]
+    fn finds_checkouts_not_symlinks() {
+        let top = std::env::temp_dir().join(format!("mdiff-find-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        for d in ["System/.git", "Modules/Core", "Modules/plain", ".hidden/.git"] {
+            std::fs::create_dir_all(top.join(d)).unwrap();
+        }
+        std::fs::write(top.join("Modules/Core/.git"), "gitdir: elsewhere\n").unwrap();
+        std::os::unix::fs::symlink(top.join("System"), top.join("Modules/Linked")).unwrap();
+        assert_eq!(find_repos(&top), vec!["Modules/Core", "System"]);
+        std::fs::remove_dir_all(&top).unwrap();
     }
 
     #[test]
