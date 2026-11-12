@@ -28,12 +28,14 @@ pub struct ResultSet {
     pub rows: Vec<Vec<Val>>,
 }
 
-/// What one request returned: a result set per statement and a summary line
-/// ("3 ms · read 12 · wrote 0").
+/// What one request returned: a result set per statement, a summary line
+/// ("3 ms · read 12 · wrote 0") and what the server said along the way
+/// (Postgres's NOTICE, WARNING and INFO messages, as psql prints them).
 #[derive(Clone, Debug, Default)]
 pub struct Output {
     pub sets: Vec<ResultSet>,
     pub info: String,
+    pub messages: String,
 }
 
 pub trait Backend: Send + Sync {

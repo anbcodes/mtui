@@ -3,7 +3,9 @@
 //
 // Each run is one psql process: the statements go to its stdin, separated by
 // marker lines, and come back as CSV (`--csv`, with NULL printed as a
-// sentinel so it stays distinct from an empty string).
+// sentinel so it stays distinct from an empty string). The marker is written
+// to stderr too (`\warn`), so the server's notices and errors there can be
+// told apart by statement.
 
 use crate::backend::{Backend, Kind, Output, ResultSet, Val};
 use crate::config;
@@ -111,7 +113,7 @@ fn set(chunk: &str) -> ResultSet {
     ResultSet { columns, rows: rows.map(|r| r.into_iter().map(val).collect()).collect() }
 }
 
-/// psql's stderr as one message: `psql:<stdin>:3: ERROR:  …` becomes `ERROR: …`.
+/// Part of psql's stderr as one message: `psql:<stdin>:3: ERROR:  …` becomes `ERROR: …`.
 fn error_text(stderr: &str) -> String {
     let lines: Vec<String> = stderr.lines().map(|l| l.strip_prefix("psql:<stdin>:").and_then(|r| r.split_once(": ")).map_or(l, |x| x.1).replace("ERROR:  ", "ERROR: ")).collect();
     let t = lines.join("\n").trim().to_string();
@@ -119,6 +121,32 @@ fn error_text(stderr: &str) -> String {
         return format!("{}\n(msql never prompts: put the password in the URL, $PGPASSWORD or ~/.pgpass)", t);
     }
     t
+}
+
+/// psql's stderr as psql would show it, split at the markers into what each
+/// statement made the server say. When several statements ran, each one that
+/// said something gets a `-- statement N: …` line above it. Anything before the
+/// first marker (a failed connection) comes first, as it is.
+fn messages(stderr: &str, stmts: &[String]) -> String {
+    let mark = format!("{}\n", MARK);
+    let mut parts = stderr.split(&mark);
+    let mut out = error_text(parts.next().unwrap_or(""));
+    for (i, (st, part)) in stmts.iter().zip(parts).enumerate() {
+        let t = error_text(part);
+        if t.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str(if stmts.len() > 1 { "\n\n" } else { "\n" });
+        }
+        if stmts.len() > 1 {
+            let first = st.trim().lines().next().unwrap_or("");
+            let more = first.chars().count() > 60 || st.trim().contains('\n');
+            out.push_str(&format!("-- statement {}: {}{}\n", i + 1, first.chars().take(60).collect::<String>().trim_end(), if more { " …" } else { "" }));
+        }
+        out.push_str(&t);
+    }
+    out
 }
 
 impl Backend for Postgres {
@@ -135,7 +163,7 @@ impl Backend for Postgres {
         let mut script = String::new();
         let stmts = sql::statements(text);
         for st in &stmts {
-            script.push_str(&format!("\\qecho {}\n{}\n", MARK, st));
+            script.push_str(&format!("\\qecho {}\n\\warn {}\n{}\n", MARK, MARK, st));
             if !st.trim_end().ends_with(';') {
                 script.push_str(";\n");
             }
@@ -145,13 +173,14 @@ impl Backend for Postgres {
         let writer = std::thread::spawn(move || stdin.write_all(script.as_bytes()));
         let out = child.wait_with_output().map_err(|e| e.to_string())?;
         let _ = writer.join();
+        let said = messages(&String::from_utf8_lossy(&out.stderr), &stmts);
         if !out.status.success() {
-            return Err(error_text(&String::from_utf8_lossy(&out.stderr)));
+            return Err(said);
         }
         let stdout = String::from_utf8_lossy(&out.stdout);
         let mut sets: Vec<ResultSet> = stdout.split(&format!("{}\n", MARK)).skip(1).map(set).collect();
         sets.truncate(stmts.len());
-        Ok(Output { sets, info: format!("{} ms", start.elapsed().as_millis()) })
+        Ok(Output { sets, info: format!("{} ms", start.elapsed().as_millis()), messages: said })
     }
 
     fn schema(&self) -> Result<Schema, String> {
@@ -201,5 +230,19 @@ mod tests {
     #[test]
     fn error_cleanup() {
         assert_eq!(error_text("psql:<stdin>:3: ERROR:  relation \"x\" does not exist\nLINE 2: select * from x\n"), "ERROR: relation \"x\" does not exist\nLINE 2: select * from x");
+    }
+
+    #[test]
+    fn messages_by_statement() {
+        let m = |s: &str| format!("{}\n", MARK) + s;
+        let stmts: Vec<String> = ["COMMIT;", "SELECT 1;", "SELECT twice();"].iter().map(|s| s.to_string()).collect();
+        let stderr = m("WARNING:  there is no transaction in progress\n") + &m("") + &m("ERROR:  relation \"tt\" already exists\nCONTEXT:  SQL statement \"CREATE TEMP TABLE tt(x int)\"\nPL/pgSQL function twice() line 1 at SQL statement\n");
+        assert_eq!(
+            messages(&stderr, &stmts),
+            "-- statement 1: COMMIT;\nWARNING:  there is no transaction in progress\n\n-- statement 3: SELECT twice();\nERROR: relation \"tt\" already exists\nCONTEXT:  SQL statement \"CREATE TEMP TABLE tt(x int)\"\nPL/pgSQL function twice() line 1 at SQL statement"
+        );
+        // one statement: no heading; a failed connection has no markers at all
+        assert_eq!(messages(&m("NOTICE:  table \"nope\" does not exist, skipping\n"), &stmts[..1]), "NOTICE:  table \"nope\" does not exist, skipping");
+        assert_eq!(messages("psql: error: connection refused\n", &stmts), "psql: error: connection refused");
     }
 }

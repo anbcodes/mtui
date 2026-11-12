@@ -32,7 +32,9 @@ Schema         :schema shows or hides the tree; :refresh reloads it from the dat
 Results        :export FILE.csv|tsv|json writes the whole result
 Schema tree    j k move   Enter open/close a table   i insert the name   p preview 100 rows   r refresh
 Results        h j k l move   g G 0 $ ends   Ctrl-D Ctrl-U page   Enter show the row   y copy the cell
-               Y copy the row (tab separated)   : command   Esc back to the editor
+               Y copy the row (tab separated)   m the Messages tab   : command   Esc back to the editor
+Messages       the tab beside Results: what psql would print besides the rows (NOTICE, WARNING,
+               INFO, errors with DETAIL / HINT / CONTEXT). m, :messages or a click switches tabs
 Row view       j k scroll   n p next/previous row   y copy   Esc back
 :q quits.  This help closes on any key.";
 
@@ -89,6 +91,12 @@ pub struct App {
     tree_top: usize,
     body: Body,
     info: String,
+    /// What the server said during the last run, and whether the Results pane shows it.
+    messages: String,
+    show_msgs: bool,
+    msg_scroll: usize,
+    /// Where the Results and Messages tabs were drawn (x ranges), for clicks.
+    tabs: [(usize, usize); 2],
     record: Option<Record>,
     running: Option<(u64, Instant)>,
     next_id: u64,
@@ -102,7 +110,7 @@ pub struct App {
     pub suspend: bool,
 }
 
-const HOST_CMDS: &[&str] = &["run", "runall", "save", "open", "new", "rm", "schema", "refresh", "export", "msql"];
+const HOST_CMDS: &[&str] = &["run", "runall", "save", "open", "new", "rm", "schema", "refresh", "export", "messages", "msql"];
 
 const BG_BAR: u8 = 236;
 const BG_SEL: u8 = 24;
@@ -153,6 +161,40 @@ fn wrap(text: &str, w: usize) -> Vec<String> {
             used += cw;
         }
         out.push(cur);
+    }
+    out
+}
+
+/// "1 warning, 2 notices" for the messages psql printed, or "" when there are none.
+fn msg_summary(messages: &str) -> String {
+    let mut parts = Vec::new();
+    for (tag, one, many) in [("WARNING:", "warning", "warnings"), ("NOTICE:", "notice", "notices"), ("INFO:", "info", "infos")] {
+        let n = messages.lines().filter(|l| l.starts_with(tag)).count();
+        if n > 0 {
+            parts.push(format!("{} {}", n, if n == 1 { one } else { many }));
+        }
+    }
+    parts.join(", ")
+}
+
+/// The colour of each line of psql's messages: errors red, warnings in the
+/// accent, DETAIL / HINT / CONTEXT dimmer than the message they belong to, and
+/// lines without a tag (CONTEXT's call stack, LINE's caret) like the line above.
+fn msg_colors(text: &str) -> Vec<(String, u8)> {
+    let mut out = Vec::new();
+    let mut fg = 252;
+    for l in text.split('\n') {
+        let tag = l.split_once(':').map_or("", |x| x.0);
+        fg = match tag {
+            "ERROR" | "FATAL" | "PANIC" => C_BAD,
+            "WARNING" => ACCENT,
+            "NOTICE" | "INFO" | "LOG" | "DEBUG" => 252,
+            "DETAIL" | "HINT" | "CONTEXT" | "QUERY" => 248,
+            _ if l.starts_with("-- statement ") => FG_DIM,
+            _ if l.is_empty() => 252,
+            _ => fg,
+        };
+        out.push((l.to_string(), fg));
     }
     out
 }
@@ -225,6 +267,10 @@ impl App {
             tree_top: 0,
             body: Body::Empty,
             info: String::new(),
+            messages: String::new(),
+            show_msgs: false,
+            msg_scroll: 0,
+            tabs: [(0, 0); 2],
             record: None,
             running: None,
             next_id: 0,
@@ -327,6 +373,12 @@ impl App {
                 }
                 self.running = None;
                 self.record = None;
+                self.show_msgs = false;
+                self.msg_scroll = 0;
+                self.messages = match &r {
+                    Ok(o) => o.messages.clone(),
+                    Err(e) => e.clone(),
+                };
                 match r {
                     Err(e) => {
                         self.body = Body::Error(e);
@@ -336,14 +388,16 @@ impl App {
                         let n = out.sets.len();
                         let pick = out.sets.iter().rposition(|s| !s.columns.is_empty()).or(n.checked_sub(1));
                         let prefix = if n > 1 { format!("{} statements · ", n) } else { String::new() };
+                        let said = msg_summary(&out.messages);
+                        let said = if said.is_empty() { String::new() } else { format!(" · {}", said) };
                         match pick.map(|i| out.sets[i].clone()) {
                             Some(set) if !set.columns.is_empty() => {
                                 let rows = set.rows.len();
-                                self.info = format!("{}{} row{} · {}", prefix, rows, if rows == 1 { "" } else { "s" }, out.info);
+                                self.info = format!("{}{} row{} · {}{}", prefix, rows, if rows == 1 { "" } else { "s" }, out.info, said);
                                 self.body = Body::Table(Box::new(Grid::new(set)));
                             }
                             _ => {
-                                self.info = format!("{}{}", prefix, out.info);
+                                self.info = format!("{}{}{}", prefix, out.info, said);
                                 self.body = Body::Message("OK".into());
                             }
                         }
@@ -508,8 +562,16 @@ impl App {
                 }
             }
             "export" => self.export(arg),
+            "messages" => self.toggle_messages(),
             _ => {}
         }
+    }
+
+    /// Switch the bottom pane between the Results and Messages tabs.
+    fn toggle_messages(&mut self) {
+        self.show_msgs = !self.show_msgs;
+        self.msg_scroll = 0;
+        self.focus = Focus::Results;
     }
 
     fn export(&mut self, path: &str) {
@@ -679,16 +741,36 @@ impl App {
             }
             return;
         }
-        let Body::Table(g) = &mut self.body else {
-            if matches!(k, Key::Esc | Key::Char('q') | Key::Char('i')) {
-                self.focus = Focus::Editor;
-            }
-            if k == Key::Char(':') {
-                self.focus = Focus::Editor;
-                self.pane.key(k);
+        let table = matches!(self.body, Body::Table(_));
+        if self.show_msgs || !table {
+            // the messages, or an error / "OK" with what the server said
+            match k {
+                Key::Char('j') | Key::Down => self.msg_scroll += 1,
+                Key::Char('k') | Key::Up => self.msg_scroll = self.msg_scroll.saturating_sub(1),
+                Key::Ctrl('d') | Key::PageDown => self.msg_scroll += visible / 2,
+                Key::Ctrl('u') | Key::PageUp => self.msg_scroll = self.msg_scroll.saturating_sub(visible / 2),
+                Key::Char('g') | Key::Home => self.msg_scroll = 0,
+                Key::Char('G') | Key::End => self.msg_scroll = usize::MAX,
+                Key::Char('m') => self.toggle_messages(),
+                Key::Esc | Key::Char('q') if self.show_msgs && table => self.show_msgs = false,
+                Key::Char('y') => {
+                    let t = self.messages.clone();
+                    self.screen.osc52(&t);
+                    self.note = Some(("copied the messages".into(), false));
+                }
+                Key::Esc | Key::Char('q') | Key::Char('i') => self.focus = Focus::Editor,
+                Key::Char(':') => {
+                    self.focus = Focus::Editor;
+                    self.pane.key(k);
+                }
+                _ => {}
             }
             return;
-        };
+        }
+        if k == Key::Char('m') {
+            return self.toggle_messages();
+        }
+        let Body::Table(g) = &mut self.body else { return };
         let (nr, nc) = (g.set.rows.len(), g.set.columns.len());
         match k {
             Key::Char('j') | Key::Down => g.row = (g.row + 1).min(nr.saturating_sub(1)),
@@ -798,6 +880,14 @@ impl App {
 
     fn mouse(&mut self, m: mtui::term::Mouse) {
         let (sw, mx, _mw, eh) = self.layout();
+        if m.kind == MouseKind::Press(0) && m.y == 1 + eh {
+            if let Some(i) = self.tabs.iter().position(|&(a, b)| m.x >= a && m.x < b) {
+                self.show_msgs = i == 1;
+                self.msg_scroll = 0;
+                self.focus = Focus::Results;
+                return;
+            }
+        }
         if (sw > 0 && self.side_div.mouse(m.kind, m.x, sw)) || (m.x >= mx && self.edit_div.mouse(m.kind, m.y.saturating_sub(1), eh)) {
             return;
         }
@@ -807,7 +897,9 @@ impl App {
         match m.kind {
             MouseKind::WheelUp | MouseKind::WheelDown => {
                 let d: isize = if m.kind == MouseKind::WheelUp { -3 } else { 3 };
-                if in_results {
+                if in_results && (self.show_msgs || !matches!(self.body, Body::Table(_))) {
+                    self.msg_scroll = (self.msg_scroll as isize + d).max(0) as usize;
+                } else if in_results {
                     if let Body::Table(g) = &mut self.body {
                         g.row = (g.row as isize + d).clamp(0, g.set.rows.len().saturating_sub(1) as isize) as usize;
                     }
@@ -844,6 +936,9 @@ impl App {
                     }
                 } else if in_results {
                     self.focus = Focus::Results;
+                    if self.show_msgs {
+                        return;
+                    }
                     if let Body::Table(g) = &mut self.body {
                         let y0 = 1 + eh;
                         if m.y >= y0 + 2 {
@@ -994,7 +1089,20 @@ impl App {
         use mtui::screen::{Style, BOLD, ITALIC};
         let focused = self.focus == Focus::Results;
         self.screen.fill(x0, x0 + w, y0, Style::new(250, BG_BAR, 0));
-        let x = self.screen.puts(x0, y0, " Results ", Style::new(16, if focused { ACCENT } else { 244 }, BOLD), x0 + w);
+        // two tabs; the open one is filled like a title, the other is a dim
+        // label (in the accent when the server said something there)
+        let mut x = x0;
+        for (i, label) in [" Results ", " Messages "].into_iter().enumerate() {
+            let open = self.show_msgs == (i == 1);
+            let st = if open {
+                Style::new(16, if focused { ACCENT } else { 244 }, BOLD)
+            } else {
+                Style::new(if i == 1 && !self.messages.is_empty() { ACCENT } else { FG_DIM }, BG_BAR, 0)
+            };
+            let end = self.screen.puts(x, y0, label, st, x0 + w);
+            self.tabs[i] = (x, end);
+            x = end;
+        }
         let status = match (&self.running, &self.note) {
             (Some((_, t)), _) => {
                 let sp = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][(t.elapsed().as_millis() / 100) as usize % 10];
@@ -1006,6 +1114,15 @@ impl App {
         self.screen.puts(x + 1, y0, &clip(&status.0, w.saturating_sub(x - x0 + 2)), Style::new(status.1, BG_BAR, 0), x0 + w);
         let body_h = h.saturating_sub(1);
         let by = y0 + 1;
+        if self.show_msgs {
+            if self.messages.is_empty() {
+                let m = if self.running.is_none() && matches!(self.body, Body::Empty) { "Run something to see what the server says." } else { "The server said nothing." };
+                self.screen.puts(x0 + 2, by + 1, m, Style::new(FG_DIM, 0, ITALIC), x0 + w);
+                return;
+            }
+            let text = self.messages.clone();
+            return self.draw_messages(&text, x0, by, w, body_h);
+        }
         match &mut self.body {
             Body::Empty => {
                 self.screen.puts(x0 + 2, by + 1, "Alt-Enter runs the statement under the cursor.", Style::new(FG_DIM, 0, ITALIC), x0 + w);
@@ -1013,11 +1130,12 @@ impl App {
             }
             Body::Message(m) => {
                 self.screen.puts(x0 + 2, by + 1, m, Style::new(C_OK, 0, BOLD), x0 + w);
+                let text = self.messages.clone();
+                self.draw_messages(&text, x0, by + 3, w, body_h.saturating_sub(3));
             }
             Body::Error(e) => {
-                for (i, l) in wrap(e, w.saturating_sub(4)).iter().take(body_h).enumerate() {
-                    self.screen.puts(x0 + 2, by + i, l, Style::new(C_BAD, 0, 0), x0 + w);
-                }
+                let text = e.clone();
+                self.draw_messages(&text, x0, by, w, body_h);
             }
             Body::Table(g) => {
                 if let Some(rec) = &mut self.record {
@@ -1103,6 +1221,16 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// psql's messages, wrapped and coloured, from `msg_scroll` on.
+    fn draw_messages(&mut self, text: &str, x0: usize, y0: usize, w: usize, h: usize) {
+        use mtui::screen::Style;
+        let lines: Vec<(String, u8)> = msg_colors(text).into_iter().flat_map(|(l, fg)| wrap(&l, w.saturating_sub(4)).into_iter().map(move |p| (p, fg))).collect();
+        self.msg_scroll = self.msg_scroll.min(lines.len().saturating_sub(h.max(1)));
+        for (i, (l, fg)) in lines.iter().skip(self.msg_scroll).take(h).enumerate() {
+            self.screen.puts(x0 + 2, y0 + i, l, Style::new(*fg, 0, 0), x0 + w);
         }
     }
 }

@@ -68,7 +68,7 @@ impl Backend for Sqlite {
         for a in arrays(&text) {
             sets.push(set_of_rows(&json::parse(a)?));
         }
-        Ok(Output { sets, info: format!("{} ms", start.elapsed().as_millis()) })
+        Ok(Output { sets, info: format!("{} ms", start.elapsed().as_millis()), ..Default::default() })
     }
 }
 

@@ -204,7 +204,7 @@ impl Backend for D1 {
             return Err(error_text(&body, status));
         }
         let results = body.get("result").arr();
-        Ok(Output { sets: results.iter().map(set).collect(), info: info(results) })
+        Ok(Output { sets: results.iter().map(set).collect(), info: info(results), ..Default::default() })
     }
 }
 

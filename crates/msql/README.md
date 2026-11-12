@@ -42,7 +42,7 @@ A schema tree on the left, the editor above, the results below. The schema is ca
 
 **Moving.** `Alt-h` schema, `Alt-j` results, `Alt-k`/`Alt-l` editor (or `Ctrl-W h`/`j` in normal mode). `:schema` hides or shows the tree, `:refresh` reloads it. The mouse works: click to focus, click a table to open or close its columns, wheel to scroll, drag the schema's edge or the Results bar to resize.
 
-**Results.** `h j k l`, `g G 0 $`, `Ctrl-D`/`Ctrl-U`; `Enter` opens the row with one column per line and long values wrapped (`n`/`p` for the next/previous row); `y` copies the cell and `Y` the row (OSC 52, so it works over ssh); `:export out.csv|tsv|json` writes the whole result. NULLs are dim, numbers right-aligned. Errors from the database are shown in full.
+**Results.** `h j k l`, `g G 0 $`, `Ctrl-D`/`Ctrl-U`; `Enter` opens the row with one column per line and long values wrapped (`n`/`p` for the next/previous row); `y` copies the cell and `Y` the row (OSC 52, so it works over ssh); `:export out.csv|tsv|json` writes the whole result. NULLs are dim, numbers right-aligned. Errors from the database are shown in full. With PostgreSQL, the **Messages** tab beside Results shows what the server said besides the rows, as psql prints it: NOTICE, WARNING and INFO, and errors with their DETAIL, HINT and CONTEXT lines, under a `-- statement N` heading per statement when several ran. `m`, `:messages` or a click switches tabs; the tab's label turns to the accent colour when there is something in it, and the Results bar counts it (`1 warning, 2 notices`). A run with no rows, or one that fails, shows the messages under Results straight away.
 
 **Schema tree.** `Enter` opens a table, `i` inserts the name at the editor's cursor, `p` previews 100 rows, `r` refreshes.
 
