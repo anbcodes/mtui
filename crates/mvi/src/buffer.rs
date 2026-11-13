@@ -106,8 +106,7 @@ impl Buffer {
                 }
                 b.lines = lines;
             }
-            let first = b.lines.first().cloned().unwrap_or_default();
-            b.lang = crate::syntax::detect(&p, &first);
+            b.lang = crate::syntax::detect_lines(&p, &b.lines);
             b.detect_indent();
             b.load_suggest();
         }

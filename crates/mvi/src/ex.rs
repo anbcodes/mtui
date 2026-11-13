@@ -665,7 +665,7 @@ impl Editor {
             if self.bb().path.is_none() {
                 let b = self.b();
                 b.name = p.display().to_string();
-                b.lang = crate::syntax::detect(&p, b.lines.first().map(|s| s.as_str()).unwrap_or(""));
+                b.lang = crate::syntax::detect_lines(&p, &b.lines);
                 b.hl = Default::default();
                 b.path = Some(p);
             } else {

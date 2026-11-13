@@ -256,6 +256,31 @@ static LANGS: &[Lang] = &[
         ..lang("java")
     },
     Lang {
+        exts: &["pl", "pm", "t", "perl"],
+        line_comment: "#",
+        strings: &[("\"", "\"", false), ("'", "'", false)],
+        keywords: &[
+            "if", "elsif", "else", "unless", "while", "until", "for", "foreach", "do", "last", "next", "redo", "return", "sub", "my", "our", "local", "use", "no", "package", "require", "print", "printf", "say", "die", "warn", "eval", "defined", "undef", "ref", "bless", "push", "pop", "shift", "unshift", "splice", "keys", "values", "each", "delete", "exists", "map", "grep", "sort", "reverse", "join", "split", "open", "close", "chomp", "lc", "uc", "length", "substr", "index", "sprintf", "and", "or", "not", "eq", "ne", "lt", "gt", "le", "ge", "cmp", "x",
+        ],
+        consts: &["__PACKAGE__", "__FILE__", "__LINE__", "__END__", "__DATA__"],
+        check: &["perl -c {file}"],
+        defs: &["sub", "package"],
+        flags: F_DOLLAR,
+        ..lang("perl")
+    },
+    Lang {
+        exts: &["prolog", "pro"],
+        line_comment: "%",
+        block: ("/*", "*/"),
+        strings: &[("\"", "\"", false), ("'", "'", false)],
+        keywords: &[
+            "is", "mod", "rem", "dynamic", "discontiguous", "module", "use_module", "ensure_loaded", "initialization", "table", "op", "findall", "bagof", "setof", "forall", "assert", "asserta", "assertz", "retract", "retractall", "atom", "var", "nonvar", "number", "integer", "write", "writeln", "print", "nl", "format", "read", "halt", "once", "ignore", "catch", "throw", "call", "not", "length", "append", "member", "memberchk", "nth0", "nth1", "msort", "sort", "between", "maplist", "foldl", "atom_codes", "atom_chars", "atom_length", "sub_atom", "number_codes",
+        ],
+        consts: &["true", "false", "fail", "nil", "[]"],
+        caps_types: true,
+        ..lang("prolog")
+    },
+    Lang {
         exts: &["rb", "rake", "gemspec"],
         files: &["Gemfile", "Rakefile"],
         line_comment: "#",
@@ -352,6 +377,49 @@ pub fn by_name(name: &str) -> Option<&'static Lang> {
     LANGS.iter().find(|l| l.name == name || l.exts.contains(&name))
 }
 
+/// Like `detect`, but looks at the text too, which settles `.pl` (Perl or Prolog).
+pub fn detect_lines(path: &Path, lines: &[String]) -> &'static Lang {
+    let first = lines.first().map(|s| s.as_str()).unwrap_or("");
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if ext == "pl" || ext == "pro" {
+        return by_name(if looks_prolog(lines) { "prolog" } else { "perl" }).unwrap_or(&PLAIN);
+    }
+    detect(path, first)
+}
+
+/// Scores the first lines: Prolog ends clauses with `.` and has `:-`, `%` comments; Perl has `;`, `$vars`, `use`/`my`/`sub`.
+fn looks_prolog(lines: &[String]) -> bool {
+    let (mut pl, mut perl) = (0i32, 0i32);
+    if lines.first().map_or(false, |l| l.starts_with("#!")) {
+        return lines[0].contains("swipl") || lines[0].contains("prolog");
+    }
+    for l in lines.iter().take(200) {
+        let t = l.trim_end();
+        let s = t.trim_start();
+        if s.is_empty() {
+            continue;
+        }
+        if s.starts_with(":-") || s.starts_with("?-") || s.contains(" :- ") || s.ends_with(":-") || s.starts_with("%") {
+            pl += 2;
+        }
+        if s.ends_with('.') && !s.starts_with('#') && !s.ends_with("..") {
+            pl += 1;
+        }
+        if s.ends_with(';') || s.ends_with('{') || s == "}" || s.starts_with('#') {
+            perl += 1;
+        }
+        let first_word = s.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("");
+        if matches!(first_word, "use" | "my" | "our" | "sub" | "package" | "foreach" | "elsif") || s.contains("=~") || s.contains("$_") || s.contains("->{") || s.contains("$self") {
+            perl += 2;
+        }
+        let b = s.as_bytes();
+        if b.windows(2).any(|w| w[0] == b'$' && (w[1].is_ascii_alphabetic() || w[1] == b'_')) {
+            perl += 2;
+        }
+    }
+    pl > perl
+}
+
 pub fn detect(path: &Path, first_line: &str) -> &'static Lang {
     let fname = path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -361,7 +429,7 @@ pub fn detect(path: &Path, first_line: &str) -> &'static Lang {
         }
     }
     if let Some(sb) = first_line.strip_prefix("#!") {
-        for (k, n) in [("python", "python"), ("bash", "sh"), ("/sh", "sh"), ("zsh", "sh"), ("node", "javascript"), ("ruby", "ruby"), ("lua", "lua"), ("escript", "erlang")] {
+        for (k, n) in [("python", "python"), ("bash", "sh"), ("/sh", "sh"), ("zsh", "sh"), ("node", "javascript"), ("ruby", "ruby"), ("lua", "lua"), ("escript", "erlang"), ("perl", "perl"), ("swipl", "prolog")] {
             if sb.contains(k) {
                 return by_name(n).unwrap_or(&PLAIN);
             }
@@ -690,5 +758,17 @@ mod tests {
         assert_eq!(h[4], STRING);
         highlight(nix, "b''; true", st, &mut h);
         assert_eq!((h[0], h[3], h[5]), (STRING, NORMAL, NUMBER));
+    }
+
+    #[test]
+    fn pl_is_perl_or_prolog() {
+        let v = |t: &str| t.lines().map(String::from).collect::<Vec<_>>();
+        let pl = Path::new("x.pl");
+        assert_eq!(detect_lines(pl, &v("#!/usr/bin/perl\nuse strict;\nmy $x = 1;\nprint \"$x\\n\";")).name, "perl");
+        assert_eq!(detect_lines(pl, &v("% family\nparent(tom, bob).\nparent(bob, ann).\ngrand(X, Z) :- parent(X, Y), parent(Y, Z).")).name, "prolog");
+        assert_eq!(detect_lines(pl, &v(":- use_module(library(lists)).\nfoo(X) :-\n    bar(X).")).name, "prolog");
+        assert_eq!(detect_lines(pl, &v("")).name, "perl");
+        assert_eq!(detect_lines(Path::new("x.pm"), &v("package Foo;\n1;")).name, "perl");
+        assert_eq!(by_name("prolog").unwrap().line_comment, "%");
     }
 }
