@@ -5,11 +5,13 @@
 mod fmt;
 mod md;
 mod page;
+mod pdf;
 mod serve;
 
 pub use fmt::format_range;
 pub use md::{esc, render, Doc, Heading, Options};
 pub use page::page;
+pub use pdf::to_pdf;
 pub use serve::{open_browser, Server};
 
 /// A standalone printable HTML document for `src`.

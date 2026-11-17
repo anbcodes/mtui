@@ -6,10 +6,13 @@ fn usage() -> ! {
     println!(
         "usage: mmd [options] FILE.md      preview in the browser, reloading as the file changes
        mmd -o OUT.html FILE.md           write a standalone, printable HTML file (- for stdout)
+       mmd -o OUT.pdf FILE.md            write a PDF (also --pdf OUT.pdf); needs Chromium or Chrome
        mmd - [-o OUT]                    read markdown from stdin
 
 options:
-  -o FILE        write HTML to FILE and exit
+  -o FILE        write HTML to FILE and exit (a .pdf name makes a PDF)
+  --pdf FILE     write a PDF with headless Chromium/Chrome (images are embedded;
+                 set MMD_BROWSER to pick the browser)
   -p PORT        preview port (default: any free one)
   --no-open      don't open the browser
   --embed        embed local images in the HTML (-o), so the file stands alone
@@ -29,6 +32,7 @@ fn main() {
     let mut out: Option<String> = None;
     let mut port = 0u16;
     let (mut open, mut embed, mut breaks) = (true, false, false);
+    let mut pdf = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -38,6 +42,10 @@ fn main() {
                 return;
             }
             "-o" => out = args.next(),
+            "--pdf" => {
+                out = args.next();
+                pdf = true;
+            }
             "-p" => port = args.next().and_then(|p| p.parse().ok()).unwrap_or(0),
             "--no-open" => open = false,
             "--embed" => embed = true,
@@ -51,6 +59,10 @@ fn main() {
     }
     let Some(file) = file else { usage() };
     let dir = if file == "-" { None } else { Some(PathBuf::from(&file).parent().map(|p| if p.as_os_str().is_empty() { PathBuf::from(".") } else { p.to_path_buf() }).unwrap_or_else(|| PathBuf::from("."))) };
+    let pdf = pdf || out.as_deref().map_or(false, |o| o.to_lowercase().ends_with(".pdf"));
+    if pdf {
+        embed = true;
+    }
     let opts = Options { hard_breaks: breaks, embed_from: if embed { dir.clone() } else { None } };
 
     if out.is_some() || file == "-" {
@@ -62,6 +74,17 @@ fn main() {
             read(&file)
         };
         let html = mmd::to_html(&src, None, &opts);
+        if pdf {
+            let Some(p) = out.as_deref().filter(|o| *o != "-") else {
+                eprintln!("mmd: --pdf needs an output file");
+                std::process::exit(2);
+            };
+            if let Err(e) = mmd::to_pdf(&html, std::path::Path::new(p)) {
+                eprintln!("mmd: {}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
         match out.as_deref() {
             None | Some("-") => print!("{}", html),
             Some(p) => {

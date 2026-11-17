@@ -6,6 +6,7 @@ A minimal markdown renderer. It makes clean, **printable** HTML and previews it 
 mmd notes.md                  # open a live preview; the page updates as the file is saved
 mmd -o notes.html notes.md    # a standalone HTML file (add --embed to inline local images)
 mmd - < notes.md > notes.html # stdin to stdout
+mmd -o notes.pdf notes.md     # a PDF (or --pdf notes.pdf); needs Chromium or Chrome
 ```
 
 ## What it renders
@@ -13,6 +14,10 @@ mmd - < notes.md > notes.html # stdin to stdout
 Headings (ATX and setext, with anchors and an outline on wide screens), emphasis, strikethrough, code spans, links (inline, reference, auto and bare URLs), images, block quotes, GitHub alerts (`> [!NOTE]`), nested ordered, unordered and task lists, tables with alignment, fenced and indented code with syntax highlighting (the same highlighter mvi uses), rules, hard breaks and the HTML people embed in READMEs. Scripts, iframes, forms, event-handler attributes and `javascript:` URLs are dropped. Every block carries `data-line`, its source line.
 
 The page follows your colour scheme on screen. For print (Ctrl-P in the browser, or "save as PDF") it switches to a serif face on white with sensible margins, hides the outline and page chrome, keeps headings with their text, avoids splitting code blocks, tables, quotes and images across pages, wraps long code lines, and writes external link addresses out after the link text.
+
+## PDF
+
+`-o FILE.pdf` (or `--pdf FILE`) prints the same page through headless Chromium or Chrome, found on `PATH` or named by `MMD_BROWSER`. Images are embedded, code lines wrap, and tables and code blocks stay whole where they fit. Syntax colours and link addresses are kept. No other dependencies.
 
 ## Live preview
 

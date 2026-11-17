@@ -61,7 +61,10 @@ body{font:11pt/1.5 Georgia,"Times New Roman",serif;-webkit-print-color-adjust:ex
 nav#toc,#live,a.anchor{display:none!important}
 h1,h2,h3,h4,h5,h6{break-after:avoid;page-break-after:avoid}
 pre,blockquote,table,img,.alert,tr,li>input{break-inside:avoid;page-break-inside:avoid}
-pre{white-space:pre-wrap;word-break:break-word;border:1px solid var(--line);background:#fafafa}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;tab-size:4;border:1px solid var(--line);background:#fafafa;padding:.5em .7em}
+pre code{white-space:inherit;overflow-wrap:inherit}
+table{max-width:100%;table-layout:auto}td,th{overflow-wrap:anywhere}
+img{max-width:100%;height:auto}
 code,pre{font-size:9pt}
 p,li{orphans:3;widows:3}
 a{text-decoration:underline}
